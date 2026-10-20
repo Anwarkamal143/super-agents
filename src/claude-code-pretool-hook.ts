@@ -4,7 +4,6 @@
  * Configure this as a PreToolUse hook in the consuming repository. Without
  * this hook, the MCP server's approvals do not technically gate native tools.
  */
-import { createInterface } from "node:readline";
 import path from "node:path";
 import { ApprovalPolicy, JsonFileApprovalStore, digestPayload } from "./approval.js";
 
