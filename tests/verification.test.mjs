@@ -45,7 +45,7 @@ function config(root, spawnProcess, overrides = {}) {
     repositoryRoot: root,
     allowedExecutables: { node: "/usr/bin/node" },
     checks: [{ id: "unit-tests", kind: "test", executable: "node", args: ["test.js"], timeoutMs: 100, maxOutputBytes: 1024 }],
-    authorize: async (action, payload) => action === "command.execute" && payload.checkId === "unit-tests",
+    authorize: async (action) => action === "command.execute",
     spawnProcess,
     ...overrides,
   };
