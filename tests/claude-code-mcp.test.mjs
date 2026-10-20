@@ -848,3 +848,80 @@ test("MCP verification does not spawn a check when human authorization is declin
   assert.equal(delivery.runnerObservedEvidencePassed, false);
   assert.equal(delivery.readyForHumanDelivery, false);
 });
+
+
+test("MCP verification rejects a missing operator profile before starting a process", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-unconfigured-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-config-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-unconfigured" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Check missing runner configuration.",
+  });
+  assert.equal(plan.approved, true);
+  const response = await client.request("tools/call", {
+    name: "factory_verification_run",
+    arguments: { runId: created.run.id, expectedRevision: plan.run.revision },
+  });
+  assert.equal(response.result.isError, true);
+  assert.match(response.result.content[0].text, /FACTORY_VERIFICATION_PROFILE/);
+  const session = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(session.evidence.some((item) => item.source === "runner_observed"), false);
+});
+
+test("MCP verification persists a non-zero process result as failed runner evidence", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-fail-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "failing-check",
+      kind: "test",
+      executable: "node",
+      args: ["-e", "throw new Error('expected fixture failure')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-fail-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-failure" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Check that failing runner processes cannot appear successful.",
+  });
+  assert.equal(plan.approved, true);
+  const report = await client.tool("factory_verification_run", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+  });
+  assert.equal(report.status, "failed");
+  assert.equal(report.checks[0].status, "failed");
+  assert.notEqual(report.checks[0].exitCode, 0);
+  const session = await client.tool("factory_session_get", { runId: created.run.id });
+  const evidence = session.evidence.filter((item) => item.source === "runner_observed");
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].outcome, "failed");
+  const delivery = await client.tool("factory_delivery_status", { runId: created.run.id });
+  assert.equal(delivery.runnerObservedEvidencePassed, false);
+  assert.equal(delivery.readyForHumanDelivery, false);
+});
