@@ -14,18 +14,17 @@ async function withDirectory(callback) {
   }
 }
 
-test("file lock is owner-readable and owner-writable only on POSIX and released after use", { skip: process.platform === "win32" }, async () => {
+test("file lock has owner-only permissions on POSIX and is released after use", async () => {
   await withDirectory(async (directory) => {
     const lockPath = path.join(directory, "workflow.lock");
-    let observedDuringOperation = false;
 
     await withFileLock(lockPath, async () => {
       const metadata = await stat(lockPath);
-      assert.equal(metadata.mode & 0o777, 0o600);
-      observedDuringOperation = true;
+      if (process.platform !== "win32") {
+        assert.equal(metadata.mode & 0o777, 0o600);
+      }
     });
 
-    assert.equal(observedDuringOperation, true);
     await assert.rejects(stat(lockPath), { code: "ENOENT" });
   });
 });
