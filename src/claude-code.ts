@@ -88,7 +88,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       };
     }
 
-    const result = await this.runProcess(["-p", request.prompt, "--output-format", "text"], request.cwd,
+    const result = await this.runProcess(["-p", request.prompt], request.cwd,
       request.timeoutMs, request.maxOutputBytes, request.signal);
     const finishedAt = this.now();
     return {
