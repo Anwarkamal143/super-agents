@@ -9,6 +9,7 @@
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { createInterface } from "node:readline";
 import type { WorkflowRun, WorkflowStatus } from "./domain.js";
 import { ApprovalPolicy, JsonFileApprovalStore, digestPayload, type ConsequentialAction } from "./approval.js";
@@ -52,7 +53,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const rpcRequest = (method: string, params: JsonObject): Promise<RpcMessage> => new Promise((resolve, reject) => {
     if (!clientElicitation) { reject(new Error("Host does not advertise MCP elicitation; approval is unavailable.")); return; }
     const id = `factory-bridge-${++nextId}`;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, 120_000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, 45_000);
     timer.unref();
     pending.set(id, (message) => { clearTimeout(timer); resolve(message); });
     send({ jsonrpc: "2.0", id, method, params });
@@ -179,7 +180,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const record = await orchestrator.getWorkflow(runId);
         if (!record) throw new Error("Workflow session not found.");
         const allEvidencePassed = record.evidence.length > 0 && record.evidence.every((item) => item.outcome === "passed");
-        return { run: record.run, evidenceCount: record.evidence.length, allEvidencePassed, readyForHumanDelivery: record.run.status === "completed" && allEvidencePassed, automaticDelivery: false, note: "Evidence submitted by the active model is not trusted runner evidence." };
+        return { run: record.run, evidenceCount: record.evidence.length, modelReportedEvidencePassed: allEvidencePassed, readyForHumanDelivery: false, automaticDelivery: false, note: "The bridge currently stores model-reported evidence only; trusted runner evidence is required before readiness can be asserted." };
       }
       default: throw new Error(`Unknown tool: ${name}`);
     }
@@ -231,7 +232,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
 }
 
 function isDirectExecution(): boolean {
-  return process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname);
+  return process.argv[1] !== undefined && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
 }
 
 if (isDirectExecution()) {
