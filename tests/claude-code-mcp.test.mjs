@@ -10,8 +10,17 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverEntry = path.join(root, "dist", "claude-code-mcp.js");
 const hookEntry = path.join(root, "dist", "claude-code-pretool-hook.js");
 
-function startClient(cwd, elicitationDecision = "accept") {
-  const child = spawn(process.execPath, [serverEntry], { cwd, env: { ...process.env, FACTORY_STATE_DIR: ".factory-state" }, stdio: ["pipe", "pipe", "pipe"] });
+function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) {
+  let currentDecision = elicitationDecision;
+  const child = spawn(process.execPath, [serverEntry], {
+    cwd,
+    env: {
+      ...process.env,
+      FACTORY_STATE_DIR: ".factory-state",
+      ...(elicitationTimeoutMs === undefined ? {} : { FACTORY_ELICITATION_TIMEOUT_MS: String(elicitationTimeoutMs) }),
+    },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
   let stdout = "";
   let stderr = "";
   const waiting = new Map();
@@ -25,14 +34,15 @@ function startClient(cwd, elicitationDecision = "accept") {
       if (!line.trim()) continue;
       const message = JSON.parse(line);
       if (message.method === "elicitation/create") {
+        if (currentDecision === "none") continue;
         child.stdin.write(JSON.stringify({
           jsonrpc: "2.0",
           id: message.id,
-          result: elicitationDecision === "accept"
+          result: currentDecision === "accept"
             ? { action: "accept", content: { decision: "approve" } }
-            : elicitationDecision === "malformed"
+            : currentDecision === "malformed"
               ? { action: "accept", content: {} }
-              : elicitationDecision === "cancel"
+              : currentDecision === "cancel"
                 ? { action: "cancel" }
                 : { action: "decline" },
         }) + "\n");
@@ -59,7 +69,7 @@ function startClient(cwd, elicitationDecision = "accept") {
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, tool, getStderr: () => stderr };
+  return { child, request, tool, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -454,4 +464,73 @@ test("PreToolUse hook allows at most one concurrent consumer of a one-time appro
   const denied = results.filter((result) => result.hookSpecificOutput?.permissionDecision === "deny");
   assert.equal(allowed.length, 1, JSON.stringify(results));
   assert.equal(denied.length, 1, JSON.stringify(results));
+});
+
+
+test("MCP bridge times out plan elicitation into a persisted cancelled run", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-plan-timeout-"));
+  const client = startClient(cwd, "none", 25);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "silent-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "plan-timeout" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "This plan must not proceed when the host never answers.",
+  });
+
+  assert.equal(plan.approved, false);
+  assert.equal(plan.blocked, true);
+  assert.equal(plan.run.status, "cancelled");
+  assert.match(plan.reason, /timed out/i);
+  const persisted = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(persisted.run.status, "cancelled");
+});
+
+test("MCP bridge does not create a native action approval when elicitation times out", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-action-timeout-"));
+  const client = startClient(cwd, "accept", 25);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "silent-after-plan-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "action-timeout" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve the plan, then simulate a host that never answers action approval.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/action-timeout.txt", content: "must remain unapproved" };
+  client.setElicitationDecision("none");
+  const response = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "Verify a missing human response fails closed.",
+    },
+  });
+  assert.equal(response.result?.isError, true);
+  assert.match(response.result.content?.[0]?.text ?? "", /timed out/i);
+
+  const hookResult = await runHook(cwd, "Write", toolInput);
+  assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
 });
