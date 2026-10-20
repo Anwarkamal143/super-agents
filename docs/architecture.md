@@ -42,3 +42,10 @@ Portable domain contracts <--- Audit events
 5. Human approval is required for consequential actions. The factory never merges its own pull request or deploys autonomously.
 6. Capability absence must be explicit. Unsupported parallelism falls back to sequential execution where safe; unsupported safety controls fail closed.
 7. Build the smallest working slice first and add abstractions only when a concrete issue needs them.
+
+
+## First persistence slice
+
+The initial orchestrator uses a JSON file store with temporary-file replacement and a serialized command queue. Every accepted transition is validated by the portable lifecycle contract, appended to an event history, and persisted before the API resolves. A failed load or save rejects the operation. Callers provide the expected run revision so stale competing transitions are rejected rather than silently overwritten.
+
+Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded steps are reported as already completed and running steps are reported as already running; neither is automatically executed again. A running step after interruption requires explicit recovery policy before it can be retried. This first slice serializes operations through one orchestrator instance; the JSON store is not a multi-process transactional database and must not be used for concurrent writers across processes.
