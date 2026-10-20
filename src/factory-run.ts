@@ -107,6 +107,7 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
   );
   if (!planAuthorization.allowed) return blocked(`Plan approval could not be consumed: ${planAuthorization.reason}.`);
 
+  await transition("running");
   const stepStart = await options.orchestrator.beginStep(run.id, "implement-approved-plan");
   if (stepStart.status !== "started") {
     return blocked(`Implementation step cannot start safely (status: ${stepStart.status}); reconcile prior work before retrying.`);
