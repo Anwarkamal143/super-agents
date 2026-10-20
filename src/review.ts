@@ -157,51 +157,51 @@ export async function reviewPinnedDiff(input: PinnedReviewInput, engine: ReviewE
 }
 
 export function validateAxisReviewReport(value: unknown, expectedAxis: ReviewAxis): AxisReviewReport {
-  if (!isRecord(value) || value.axis !== expectedAxis ||
-      (value.status !== "passed" && value.status !== "changes_requested" && value.status !== "blocked") ||
-      typeof value.summary !== "string" || !value.summary.trim() || !Array.isArray(value.findings)) {
+  if (!isRecord(value) || value["axis"] !== expectedAxis ||
+      (value["status"] !== "passed" && value["status"] !== "changes_requested" && value["status"] !== "blocked") ||
+      typeof value["summary"] !== "string" || !value["summary"].trim() || !Array.isArray(value["findings"])) {
     throw new ReviewOutputError(`Malformed ${expectedAxis} review report.`);
   }
 
   const seen = new Set<string>();
-  const findings: ReviewFinding[] = value.findings.map((raw, index) => {
-    if (!isRecord(raw) || typeof raw.id !== "string" || !raw.id.trim() || seen.has(raw.id) ||
-        !SEVERITIES.includes(raw.severity as ReviewSeverity) ||
-        typeof raw.title !== "string" || !raw.title.trim() ||
-        typeof raw.detail !== "string" || !raw.detail.trim() ||
-        !FINDING_STATUSES.includes(raw.status as ReviewFindingStatus)) {
+  const findings: ReviewFinding[] = value["findings"].map((raw, index) => {
+    if (!isRecord(raw) || typeof raw["id"] !== "string" || !raw["id"].trim() || seen.has(raw["id"]) ||
+        !SEVERITIES.includes(raw["severity"] as ReviewSeverity) ||
+        typeof raw["title"] !== "string" || !raw["title"].trim() ||
+        typeof raw["detail"] !== "string" || !raw["detail"].trim() ||
+        !FINDING_STATUSES.includes(raw["status"] as ReviewFindingStatus)) {
       throw new ReviewOutputError(`Malformed ${expectedAxis} finding at index ${index}.`);
     }
-    seen.add(raw.id);
-    if (raw.file !== undefined && (typeof raw.file !== "string" || !raw.file.trim() || raw.file.startsWith("/") ||
-      raw.file.split(/[\\/]/).includes(".."))) {
-      throw new ReviewOutputError(`Invalid file path in ${expectedAxis} finding ${raw.id}.`);
+    seen.add(raw["id"]);
+    if (raw["file"] !== undefined && (typeof raw["file"] !== "string" || !raw["file"].trim() || raw["file"].startsWith("/") ||
+      raw["file"].split(/[\\/]/).includes(".."))) {
+      throw new ReviewOutputError(`Invalid file path in ${expectedAxis} finding ${raw["id"]}.`);
     }
-    if (raw.line !== undefined && (!Number.isSafeInteger(raw.line) || (raw.line as number) < 1)) {
-      throw new ReviewOutputError(`Invalid line number in ${expectedAxis} finding ${raw.id}.`);
+    if (raw["line"] !== undefined && (!Number.isSafeInteger(raw["line"]) || (raw["line"] as number) < 1)) {
+      throw new ReviewOutputError(`Invalid line number in ${expectedAxis} finding ${raw["id"]}.`);
     }
     return {
-      id: raw.id,
-      severity: raw.severity as ReviewSeverity,
-      title: raw.title,
-      detail: raw.detail,
-      ...(raw.file !== undefined ? { file: raw.file as string } : {}),
-      ...(raw.line !== undefined ? { line: raw.line as number } : {}),
-      status: raw.status as ReviewFindingStatus,
+      id: raw["id"],
+      severity: raw["severity"] as ReviewSeverity,
+      title: raw["title"],
+      detail: raw["detail"],
+      ...(raw["file"] !== undefined ? { file: raw["file"] as string } : {}),
+      ...(raw["line"] !== undefined ? { line: raw["line"] as number } : {}),
+      status: raw["status"] as ReviewFindingStatus,
     };
   });
 
-  if (value.status === "passed" && findings.some((finding) =>
+  if (value["status"] === "passed" && findings.some((finding) =>
     finding.status === "open" && (finding.severity === "critical" || finding.severity === "high"))) {
     throw new ReviewOutputError(`${expectedAxis} report cannot pass with open critical/high findings.`);
   }
-  if (value.status === "passed" && findings.some((finding) => finding.status === "open")) {
+  if (value["status"] === "passed" && findings.some((finding) => finding.status === "open")) {
     throw new ReviewOutputError(`${expectedAxis} report cannot pass with open findings.`);
   }
   return {
     axis: expectedAxis,
-    status: value.status,
-    summary: value.summary,
+    status: value["status"],
+    summary: value["summary"],
     findings,
   };
 }
