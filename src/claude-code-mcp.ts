@@ -47,15 +47,15 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const rl = createInterface({ input, crlfDelay: Infinity });
   let nextId = 0;
   let clientElicitation = false;
-  const pending = new Map<string | number, (message: RpcMessage) => void>();
+  const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
 
   const send = (message: RpcMessage) => { output.write(JSON.stringify(message) + "\n"); };
-  const rpcRequest = (method: string, params: JsonObject): Promise<RpcMessage> => new Promise((resolve, reject) => {
+  const rpcRequest = (method: string, params: JsonObject, parentRequestId?: string | number): Promise<RpcMessage> => new Promise((resolve, reject) => {
     if (!clientElicitation) { reject(new Error("Host does not advertise MCP elicitation; approval is unavailable.")); return; }
     const id = `factory-bridge-${++nextId}`;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, 45_000);
     timer.unref();
-    pending.set(id, (message) => { clearTimeout(timer); resolve(message); });
+    pending.set(id, { resolve: (message) => { clearTimeout(timer); resolve(message); }, reject: (error) => { clearTimeout(timer); reject(error); }, ...(parentRequestId !== undefined ? { parentRequestId } : {}) });
     send({ jsonrpc: "2.0", id, method, params });
   });
 
@@ -74,12 +74,12 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) throw new TypeError(`${key} must be a plain object.`);
     return value as JsonObject;
   };
-  const requestHuman = async (message: string): Promise<{ action: ElicitationAction; content?: JsonObject }> => {
+  const requestHuman = async (message: string, parentRequestId?: string | number): Promise<{ action: ElicitationAction; content?: JsonObject }> => {
     const response = await rpcRequest("elicitation/create", {
       mode: "form",
       message,
       requestedSchema: { type: "object", properties: { decision: { type: "string", enum: ["approve", "decline"] } }, required: ["decision"], additionalProperties: false },
-    });
+    }, parentRequestId);
     const result = response.result as JsonObject | undefined;
     const action = result?.["action"];
     if (action !== "accept" && action !== "decline" && action !== "cancel") throw new Error("Malformed elicitation response; action blocked.");
@@ -87,7 +87,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     return { action, ...(content ? { content } : {}) };
   };
 
-  const callTool = async (name: string, args: JsonObject): Promise<unknown> => {
+  const callTool = async (name: string, args: JsonObject, parentRequestId?: string | number): Promise<unknown> => {
     switch (name) {
       case "factory_session_create": {
         const requestId = requireString(args, "requestId");
@@ -115,7 +115,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         run = await orchestrator.transition(runId, "awaiting_approval", run.revision);
         const digest = digestPayload({ runId, revision: expectedRevision, plan });
         let response: { action: ElicitationAction; content?: JsonObject };
-        try { response = await requestHuman(`Approve this factory plan? Run: ${runId}. Plan SHA-256: ${digest}.\n\n${plan}`); }
+        try { response = await requestHuman(`Approve this factory plan? Run: ${runId}. Plan SHA-256: ${digest}.\n\n${plan}`, parentRequestId); }
         catch (error) {
           await orchestrator.transition(runId, "cancelled", run.revision);
           return { approved: false, blocked: true, reason: error instanceof Error ? error.message : "Elicitation failed." };
@@ -149,7 +149,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         if (!((actionType === "file.write" && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) || (actionType === "command.execute" && toolName === "Bash"))) throw new TypeError("Action type does not match the native tool.");
         const payload = { toolName, toolInput };
         const digest = digestPayload(payload);
-        const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`);
+        const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
         if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
           return { approved: false, blocked: true, reason: "Human declined, cancelled, or did not explicitly approve this exact action." };
         }
@@ -192,7 +192,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       try { message = JSON.parse(line) as RpcMessage; }
       catch { send({ jsonrpc: "2.0", id: "parse-error", error: { code: -32700, message: "Parse error" } }); return; }
       if (message.id !== undefined && pending.has(message.id)) {
-        pending.get(message.id)!(message);
+        pending.get(message.id)!.resolve(message);
         pending.delete(message.id);
         return;
       }
@@ -208,7 +208,17 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. This server supports only MCP 2025-11-25 elicitation. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
         return;
       }
-      if (message.method === "notifications/initialized" || message.method === "notifications/cancelled") return;
+      if (message.method === "notifications/initialized") return;
+      if (message.method === "notifications/cancelled") {
+        const cancelledRequestId = message.params?.["requestId"];
+        for (const [elicitationId, request] of pending) {
+          if (request.parentRequestId === cancelledRequestId) {
+            pending.delete(elicitationId);
+            request.reject(new Error("The host cancelled the parent tool call; approval was not granted."));
+          }
+        }
+        return;
+      }
       if (message.method === "tools/list") {
         send({ jsonrpc: "2.0", id: message.id, result: { tools: TOOLS } });
         return;
@@ -218,7 +228,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           const params = message.params ?? {};
           const name = requireString(params, "name");
           const args = params["arguments"] === undefined ? {} : requireObject(params["arguments"], "arguments");
-          const result = await callTool(name, args);
+          const result = await callTool(name, args, message.id);
           send({ jsonrpc: "2.0", id: message.id, result: textResult(result) });
         } catch (error) {
           send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "Tool failed closed." }] } });
