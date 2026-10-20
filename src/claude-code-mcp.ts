@@ -162,6 +162,19 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const payload = { toolName, toolInput };
         const digest = digestPayload(payload);
         const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
+        // Revalidate after the user prompt: the run may have been cancelled or
+        // advanced while elicitation was pending. Never mint a stale approval.
+        const latest = await orchestrator.getWorkflow(runId);
+        const stillActionable = latest !== null &&
+          latest.run.revision === record.run.revision &&
+          (latest.run.status === "running" || latest.run.status === "verifying" || latest.run.status === "reviewing");
+        if (!stillActionable) {
+          await approvals.recordDecision({
+            actionType, payload, outcome: "denied", decidedBy: "claude-code-elicitation-host",
+            rationale: "Workflow changed or became non-actionable while approval was pending.", scopeId: runId,
+          });
+          return { approved: false, blocked: true, reason: "Workflow changed while approval was pending; reload the session and request fresh approval." };
+        }
         if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
           await approvals.recordDecision({
             actionType, payload, outcome: "denied", decidedBy: "claude-code-elicitation-host",
