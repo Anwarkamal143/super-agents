@@ -10,7 +10,7 @@ const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverEntry = path.join(root, "dist", "claude-code-mcp.js");
 const hookEntry = path.join(root, "dist", "claude-code-pretool-hook.js");
 
-function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) {
+function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, verificationProfile) {
   let currentDecision = elicitationDecision;
   const child = spawn(process.execPath, [serverEntry], {
     cwd,
@@ -18,6 +18,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
       ...process.env,
       FACTORY_STATE_DIR: ".factory-state",
       ...(elicitationTimeoutMs === undefined ? {} : { FACTORY_ELICITATION_TIMEOUT_MS: String(elicitationTimeoutMs) }),
+      ...(verificationProfile === undefined ? {} : { FACTORY_VERIFICATION_PROFILE: JSON.stringify(verificationProfile) }),
     },
     stdio: ["pipe", "pipe", "pipe"],
   });
@@ -738,4 +739,112 @@ test("PreToolUse hook denies a matching approval when persisted workflow state i
       `${failureMode} workflow state must deny a matching approval: ${JSON.stringify(hookResult)}`,
     );
   }
+});
+
+
+test("MCP verification runs operator-configured checks and persists runner-observed evidence", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "fixture-check",
+      kind: "test",
+      executable: "node",
+      args: ["-e", "process.stdout.write('verified'); process.stderr.write('diagnostic')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-evidence" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Run the configured verification fixture.",
+  });
+  assert.equal(plan.approved, true);
+
+  const report = await client.tool("factory_verification_run", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+  });
+  assert.equal(report.status, "passed");
+  assert.equal(report.evidenceSource, "runner_observed");
+  assert.equal(report.checks.length, 1);
+  assert.equal(report.checks[0].status, "passed");
+  assert.equal(report.checks[0].exitCode, 0);
+  assert.equal(report.checks[0].stdout, undefined, "raw process output is not returned to the model");
+  assert.equal(typeof report.checks[0].stdoutDigest, "string");
+
+  const session = await client.tool("factory_session_get", { runId: created.run.id });
+  const evidence = session.evidence.filter((item) => item.source === "runner_observed");
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].outcome, "passed");
+  assert.match(evidence[0].summary, /Runner observed passed/);
+
+  const delivery = await client.tool("factory_delivery_status", { runId: created.run.id });
+  assert.equal(delivery.runnerObservedEvidenceCount, 1);
+  assert.equal(delivery.runnerObservedEvidencePassed, true);
+  assert.equal(delivery.readyForHumanDelivery, false);
+});
+
+test("MCP verification does not spawn a check when human authorization is declined", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-deny-"));
+  const marker = path.join(cwd, "must-not-exist.txt");
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "denied-check",
+      kind: "command",
+      executable: "node",
+      args: ["-e", "require('node:fs').writeFileSync('must-not-exist.txt', 'ran')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-deny-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-denied" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Exercise verification authorization denial.",
+  });
+  assert.equal(plan.approved, true);
+  client.setElicitationDecision("decline");
+
+  const report = await client.tool("factory_verification_run", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+  });
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.checks[0].status, "blocked");
+  await assert.rejects(import("node:fs/promises").then(({ stat }) => stat(marker)), { code: "ENOENT" });
+
+  const session = await client.tool("factory_session_get", { runId: created.run.id });
+  const evidence = session.evidence.filter((item) => item.source === "runner_observed");
+  assert.equal(evidence.length, 1);
+  assert.equal(evidence[0].outcome, "unknown");
+  const delivery = await client.tool("factory_delivery_status", { runId: created.run.id });
+  assert.equal(delivery.runnerObservedEvidencePassed, false);
+  assert.equal(delivery.readyForHumanDelivery, false);
 });
