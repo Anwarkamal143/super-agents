@@ -125,6 +125,24 @@ test("MCP bridge requires elicitation and one-time exact native-tool approval", 
 
   const modified = await runHook(cwd, "Write", { ...toolInput, content: "changed after approval" });
   assert.equal(modified.hookSpecificOutput.permissionDecision, "deny");
+
+  const staleInput = { file_path: "/tmp/stale-factory-test.txt", content: "must not run after cancellation" };
+  const staleApproval = await client.tool("factory_action_request_approval", {
+    runId: created.run.id,
+    actionType: "file.write",
+    toolName: "Write",
+    toolInput: staleInput,
+    reason: "Verify cancellation revokes an unused approval.",
+  });
+  assert.equal(staleApproval.approved, true);
+  const cancelled = await client.tool("factory_phase_transition", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+    to: "cancelled",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  const afterCancel = await runHook(cwd, "Write", staleInput);
+  assert.equal(afterCancel.hookSpecificOutput.permissionDecision, "deny");
 });
 
 test("MCP bridge fails closed when the human declines plan approval", async (t) => {
