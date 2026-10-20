@@ -53,7 +53,7 @@ Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded
 
 `HarnessAdapter` is the portable boundary between orchestration and an agent runtime. Inputs are typed, validated, and carry a working directory, timeout, output byte limit, and optional abort signal. Results distinguish success, non-zero exit, timeout, cancellation, and unavailable runtime; stdout/stderr are bounded and truncation is explicit.
 
-The Claude Code adapter probes the configured executable's version and help output before claiming print-mode support. It passes prompt text as a separate argument with `shell: false`, never interpolating it into a shell command. The core contract imports no Claude-specific runtime. Parallel-agent support and structured output are reported unsupported until they are explicitly implemented and detected.
+The Claude Code adapter probes the configured executable's version and help output before claiming print-mode support. It passes prompt text as a separate argument with `shell: false`, never interpolating it into a shell command. The core contract imports no Claude-specific runtime. Parallel-agent support and structured output are reported unsupported until they are explicitly implemented and detected. The adapter-neutral contract suite is exercised against both Claude Code (with a fake process) and a deterministic scripted fixture that does not import Claude-specific code; see [Adding a harness adapter](harness-adapters.md).
 
 Capability detection does not authorize an action. Approval policy and verification remain separate workflow responsibilities. Integration checks are opt-in because they invoke an installed Claude CLI and may incur external side effects or cost.
 
