@@ -58,3 +58,10 @@ Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded
 The Claude Code adapter probes the configured executable's version and help output before claiming print-mode support. It passes prompt text as a separate argument with `shell: false`, never interpolating it into a shell command. The core contract imports no Claude-specific runtime. Parallel-agent support and structured output are reported unsupported until they are explicitly implemented and detected.
 
 Capability detection does not authorize an action. Approval policy and verification remain separate workflow responsibilities. Integration checks are opt-in because they invoke an installed Claude CLI and may incur external side effects or cost.
+
+
+## Approval policy
+
+Consequential actions are allowlisted by stable action type; unknown types are denied. A human decision is bound to the action type and SHA-256 digest of canonical JSON payload, so reordering object keys does not change identity but material payload changes do. Approval is consumed atomically by the ledger on successful authorization and cannot be replayed. Decisions and authorization attempts append audit events containing action type, digest, actor, timestamp, and outcome metadata only—never the raw payload, rationale, or credentials.
+
+The JSON ledger uses atomic file replacement and restrictive file permissions. Like the initial workflow JSON store, it is a single-process store, not a multi-process transactional database; production multi-writer deployments need a transactional store with uniqueness/compare-and-swap semantics. Approval recording must only be called by a trusted human decision boundary. Policy authorization is necessary but does not itself execute the action, and merge/deploy remain human-controlled.
