@@ -88,8 +88,9 @@ test("Claude adapter bounds combined stdout/stderr and reports truncation", asyn
   const spawnProcess = (_executable, args) => fakeChildProcess((child) => queueMicrotask(() => {
     if (args[0] === "--version") child.stdout.end("2.0.0\\n");
     else if (args[0] === "--help") child.stdout.end("Usage: claude -p [options]\\n");
-    else child.stdout.end("0123456789");
-    child.emit("close", 0);
+    else child.stdout.write("0123456789");
+    child.stdout.end();
+    setImmediate(() => child.emit("close", child.killSignal ? 1 : 0));
   }));
   const adapter = new ClaudeCodeAdapter({ spawnProcess });
   const result = await adapter.invoke({
