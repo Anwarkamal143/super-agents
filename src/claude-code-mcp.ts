@@ -186,8 +186,21 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const runId = requireString(args, "runId");
         const record = await orchestrator.getWorkflow(runId);
         if (!record) throw new Error("Workflow session not found.");
-        const allEvidencePassed = record.evidence.length > 0 && record.evidence.every((item) => item.outcome === "passed");
-        return { run: record.run, evidenceCount: record.evidence.length, modelReportedEvidencePassed: allEvidencePassed, readyForHumanDelivery: false, automaticDelivery: false, note: "The bridge currently stores model-reported evidence only; trusted runner evidence is required before readiness can be asserted." };
+        const modelReported = record.evidence.filter((item) => item.source === "model_reported");
+        const runnerObserved = record.evidence.filter((item) => item.source === "runner_observed");
+        const modelReportedEvidencePassed = modelReported.length > 0 && modelReported.every((item) => item.outcome === "passed");
+        const runnerObservedEvidencePassed = runnerObserved.length > 0 && runnerObserved.every((item) => item.outcome === "passed");
+        return {
+          run: record.run,
+          evidenceCount: record.evidence.length,
+          modelReportedEvidenceCount: modelReported.length,
+          runnerObservedEvidenceCount: runnerObserved.length,
+          modelReportedEvidencePassed,
+          runnerObservedEvidencePassed,
+          readyForHumanDelivery: false,
+          automaticDelivery: false,
+          note: "Evidence provenance is persisted separately. Model-reported claims never count as runner-observed evidence; this bridge still requires a separate human delivery review.",
+        };
       }
       default: throw new Error(`Unknown tool: ${name}`);
     }
