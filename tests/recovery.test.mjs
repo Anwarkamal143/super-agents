@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, readFile } from "node:fs/promises";
+import { mkdtemp, rm, readFile, stat } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -103,5 +103,16 @@ test("recovery and step audit records are ordered and do not store free-form sum
     const audit = state?.events.filter((event) => event.kind?.startsWith("step_")) ?? [];
     assert.deepEqual(audit.map((event) => event.kind), ["step_started", "step_finished"]);
     assert.equal(JSON.stringify(audit).includes("token=do-not-audit"), false);
+  });
+});
+
+
+test("workflow state file is owner-readable and owner-writable only on POSIX", { skip: process.platform === "win32" }, async () => {
+  await withDirectory(async (directory) => {
+    const file = path.join(directory, "workflows.json");
+    const orchestrator = new WorkflowOrchestrator(new JsonFileWorkflowStore(file));
+    await orchestrator.createRun(makeRun());
+    const metadata = await stat(file);
+    assert.equal(metadata.mode & 0o777, 0o600);
   });
 });
