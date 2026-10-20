@@ -58,7 +58,6 @@ The package exposes building blocks, not a complete interactive CLI or productio
 | `WorkflowOrchestrator` | Persist runs, transitions, step markers, verification evidence, and recovery events | Caller controls the workflow; ambiguous running steps require recovery |
 | `HarnessAdapter` / `ClaudeCodeAdapter` | Invoke a harness through a portable contract | Capability detection is not approval; real CLI integration is opt-in |
 
-See [Adding a harness adapter](harness-adapters.md) for the portable interface, adapter responsibilities, and shared contract tests. The test suite runs the same contract assertions against the Claude adapter (using a fake process) and a scripted non-Claude fixture.
 | `ApprovalPolicy` | Record action-scoped decisions and consume them once | Human identity must be authenticated by the integrating application |
 | `runVerification` | Run explicitly configured checks and preserve bounded evidence | Absolute executable allowlist and exact-command authorization required |
 | `reviewPinnedDiff` / `reviewWithBoundedRepair` | Validate independent Standards/Spec reports and coordinate bounded repair | Reviewer output is untrusted; repair requires authorization and exact fixed-point verification |
@@ -148,9 +147,14 @@ Troubleshooting:
 
 A live smoke pass proves only that this CLI adapter can invoke a bounded prompt in an isolated directory. It does not prove that the model follows the full factory workflow, that approval gates are enforced outside the prompt, or that production integrations are secure.
 
+## Package installation and lifecycle
+
+The npm package is private by default and is not published to a registry. Build a local tarball and install the exact artifact into a consumer project when testing distribution. The installed package exposes the ESM library, declarations, board schema/example, documentation, and skill file; it does not auto-install the skill into Claude Code or overwrite consumer state. Follow [Package distribution, install, upgrade, and rollback](release.md) for the tested tarball workflow and release checklist.
+
 ## More detail
 
 - [Example target repository and end-to-end walkthrough](example-walkthrough.md)
+- [Package distribution, install, upgrade, and rollback](release.md)
 - [Architecture contract](architecture.md)
 - [Threat model and residual risk](threat-model.md)
 - [Security model overview](security-model.md)

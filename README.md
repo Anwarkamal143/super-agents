@@ -18,6 +18,10 @@ npm run check
 
 The default test suite includes deterministic Claude adapter smoke coverage and does not require a Claude Code installation. An optional real-CLI smoke test is documented in [the usage guide](docs/usage.md).
 
+## Package distribution
+
+The package is private by default and is not published to npm. To build and inspect a local installable tarball, run `npm run test:package` and `npm pack --dry-run`. See the [package install, upgrade, rollback, and release checklist](docs/release.md). Installing the library does not automatically install the `/factory` skill into another repository or overwrite its board.
+
 ## Invoke /factory in another repository
 
 Copy `.claude/skills/factory/SKILL.md` into the target repository at the same path, and copy `factory/board.schema.json` and `factory/board.example.json` into a `factory/` directory. See [the usage guide](docs/usage.md) for the exact install commands and first-run example.
@@ -46,6 +50,7 @@ The skill is an instruction contract, not a security sandbox. JSON stores and co
 ## Documentation
 
 - [Usage and /factory installation](docs/usage.md)
+- [Package distribution, install, upgrade, and rollback](docs/release.md)
 - [Adding a harness adapter](docs/harness-adapters.md)
 - [Example target repository and end-to-end walkthrough](docs/example-walkthrough.md)
 - [Architecture contract](docs/architecture.md)
