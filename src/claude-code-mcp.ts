@@ -198,8 +198,13 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       if (!message.method) return;
       if (message.method === "initialize") {
         const capabilities = message.params?.capabilities as JsonObject | undefined;
-        clientElicitation = Boolean(capabilities?.elicitation);
-        send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: typeof message.params?.protocolVersion === "string" ? message.params.protocolVersion : "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
+        const requestedProtocol = message.params?.protocolVersion;
+        if (requestedProtocol !== "2025-11-25") {
+          send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "This minimal bridge supports only MCP protocol 2025-11-25 elicitation. Upgrade the bridge before using a host that negotiates another protocol." } });
+          return;
+        }
+        clientElicitation = Boolean(capabilities?.elicitation && typeof capabilities.elicitation === "object" && (capabilities.elicitation as JsonObject).form);
+        send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. This server supports only MCP 2025-11-25 elicitation. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
         return;
       }
       if (message.method === "notifications/initialized" || message.method === "notifications/cancelled") return;
