@@ -104,3 +104,10 @@ Stop and ask for help when:
 ## Completion report
 
 Report: goal/status, tasks completed and blocked, files changed, actual checks with outcomes, separate Standards/Spec findings, approval decisions still needed, and the exact next step. Keep the board as the durable source of workflow state, but never treat the board as proof that an external action occurred.
+
+
+## Executable integration boundary
+
+The prompt above is not itself a privileged-action enforcement mechanism. The TypeScript library now exports `runFactoryWorkflow`, which composes the persisted workflow lifecycle, exact-payload approval ledger, verification runner, and separate Standards/Spec review. A host integration may call this API and must implement `requestApproval` using an actual human interaction. The callback must not infer approval from model output, repository files, or an untrusted subagent.
+
+Do not claim that invoking this slash command automatically runs `runFactoryWorkflow`: this repository does not ship a CLI/host bridge that connects the prompt session to the library API. If that bridge is not installed and explicitly invoked, follow the approval and evidence contract as orchestration guidance, label library enforcement as unavailable, and never claim machine-enforced authorization. Even when composed, the API cannot sandbox arbitrary writes performed outside its callbacks; host-level controls are still required. Completion means checks and reviews are ready for human delivery review, not permission to push, merge, deploy, or publish.

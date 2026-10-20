@@ -13,3 +13,4 @@ export * from "./verification.js";
 export * from "./review.js";
 export * from "./manifests.js";
 export * from "./board.js";
+export * from "./factory-run.js";

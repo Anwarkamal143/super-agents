@@ -77,7 +77,7 @@ If a check fails, report `failed`; if not run, report `not run` or `skipped`; if
 
 Try invoking the skill but decline to approve the proposed implementation plan. The correct behavior is to stop before editing files and leave implementation blocked/awaiting approval. Alternatively, if an approved test fails, the report must preserve the failure and explain the next safe step rather than claim the feature is complete.
 
-The example board illustrates the approval boundary but is not itself a live state machine. The current skill guides this behavior; the core library's structured approval, verification, and workflow APIs are separate building blocks and are not automatically wired into the prompt.
+The example board illustrates the approval boundary but is not itself a live state machine. The skill remains prompt-guided and is not automatically wired to call the TypeScript API. For the executable, credential-free composed path, run `npm test`; `tests/factory-e2e.test.mjs` exercises `runFactoryWorkflow` against temporary file stores and real child-process verification, including approval denial and failed-check blocking. The API composes workflow persistence, exact-payload approval consumption, verification, and independent review, then stops at `ready_for_human_delivery`. A host bridge still must connect `/factory` to this API and supply a real human approval interaction; the callback and library are not a sandbox for arbitrary model-driven filesystem writes.
 
 ## 8. Delivery remains human-controlled
 
