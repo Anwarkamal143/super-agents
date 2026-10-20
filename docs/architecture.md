@@ -43,13 +43,11 @@ Portable domain contracts <--- Audit events
 6. Capability absence must be explicit. Unsupported parallelism falls back to sequential execution where safe; unsupported safety controls fail closed.
 7. Build the smallest working slice first and add abstractions only when a concrete issue needs them.
 
-
 ## First persistence slice
 
 The initial orchestrator uses a JSON file store with temporary-file replacement and a serialized command queue. Every accepted transition is validated by the portable lifecycle contract, appended to an event history, and persisted before the API resolves. A failed load or save rejects the operation. Callers provide the expected run revision so stale competing transitions are rejected rather than silently overwritten.
 
 Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded steps are reported as already completed and running steps are reported as already running; neither is automatically executed again. A running step after interruption requires explicit recovery policy before it can be retried. This first slice serializes operations through one orchestrator instance; the JSON store is not a multi-process transactional database and must not be used for concurrent writers across processes.
-
 
 ## Harness adapter contract
 
@@ -59,13 +57,11 @@ The Claude Code adapter probes the configured executable's version and help outp
 
 Capability detection does not authorize an action. Approval policy and verification remain separate workflow responsibilities. Integration checks are opt-in because they invoke an installed Claude CLI and may incur external side effects or cost.
 
-
 ## Approval policy
 
 Consequential actions are allowlisted by stable action type; unknown types are denied. A human decision is bound to the action type and SHA-256 digest of canonical JSON payload, so reordering object keys does not change identity but material payload changes do. Approval is consumed atomically by the ledger on successful authorization and cannot be replayed. Decisions and authorization attempts append audit events containing action type, digest, actor, timestamp, and outcome metadata only—never the raw payload, rationale, or credentials.
 
 The JSON ledger uses atomic file replacement and restrictive file permissions. Like the initial workflow JSON store, it is a single-process store, not a multi-process transactional database; production multi-writer deployments need a transactional store with uniqueness/compare-and-swap semantics. Approval recording must only be called by a trusted human decision boundary. Policy authorization is necessary but does not itself execute the action, and merge/deploy remain human-controlled.
-
 
 ## Verification runner
 
@@ -75,9 +71,16 @@ Each result records command identity, exit status, timestamps, duration, bounded
 
 The runner does not itself establish human identity or create approvals. Its authorization callback must be wired to the trusted approval policy and a previously recorded approval scoped to that exact check. Configured command arguments remain trusted configuration and should be reviewed as code.
 
-
 ## Independent review and bounded repair
 
 Standards review and Spec review are separate structured reports over the same pinned base/head commit pair and SHA-256 diff digest. Review input requires an originating issue/spec identifier, a non-empty diff, valid full commit IDs, and repository standards. A missing spec is reported explicitly and blocks a passing aggregate; the factory does not invent acceptance requirements. Malformed review output, mismatched axes, unsafe finding paths, and inconsistent passing reports fail closed.
 
 Repair is a bounded coordinator, not an autonomous permission source. Each repair attempt requires a separate authorization callback; after applying a repair, verification must pass for the exact returned diff and fixed point before either review axis runs again. A failed, incomplete, or mismatched verification blocks the loop. Repair limits are explicitly configured and capped; exhausting the limit returns a blocked result for human intervention. The coordinator does not authenticate the human approver or execute verification itself—callers must wire those callbacks to the trusted approval policy and verification runner.
+
+## Skill/component manifests
+
+A manifest is portable declarative metadata with a schema version, stable lowercase ID, semantic version, description, repository-relative entrypoint, required capability identifiers, typed input/output declarations, and an explicit trust level. The core validates unknown JSON without coercing values and rejects unsupported schema versions, malformed fields, duplicate IDs, and unsafe entrypoint paths. Entrypoints are identifiers only: discovery never imports, installs, or executes them.
+
+Capability discovery compares required capabilities against the adapter's reported capabilities before a manifest can be considered compatible. Missing capabilities are returned explicitly so orchestration can block or ask for a different adapter rather than silently degrading.
+
+Registry changes are explicit `add`, `modify`, or `remove` operations. Each successful operation returns a secret-free audit event containing actor, timestamp, manifest ID, operation, and relevant versions. The caller must durably persist both the updated registry and audit event before reporting success; this module does not claim to provide storage transactions or authenticate the actor. Third-party content remains untrusted regardless of its declared trust label, and trust labels do not grant execution or approval rights.
