@@ -58,7 +58,7 @@ The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and 
 3. Call `factory_plan_request_approval` with the current revision and exact plan. A human decision must arrive through MCP elicitation. Decline, cancel, unsupported elicitation, malformed response, timeout, or persistence failure blocks the plan.
 4. Continue work in the active session only after the plan is approved.
 5. Before each governed native write or command, call `factory_action_request_approval` with the native tool name and its exact `toolInput`. The hook compares that payload to the real PreToolUse input and consumes the one-time approval.
-6. Submit evidence with `factory_evidence_submit`. Evidence submitted by the model is labelled `model-reported-unverified`; it is not trusted runner evidence.
+6. Submit evidence with `factory_evidence_submit`. Provenance is persisted on every evidence record: model-submitted claims use `source: model_reported`, subprocess verification evidence uses `source: runner_observed`, and independent review results use `source: review_engine`. A model cannot promote its own claim to runner evidence. `factory_delivery_status` reports counts and pass states by source and always keeps human delivery approval required.
 7. Use `factory_phase_transition` with the latest expected revision. `factory_delivery_status` only reports state and never creates a PR, merges, deploys, or publishes.
 
 ## Protocol and trust limitations
@@ -67,7 +67,7 @@ The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and 
 - The real Claude Code client may negotiate a newer MCP protocol or implement elicitation differently. If the configured client does not support this exact request/response flow, approval fails closed. Do not claim real-host compatibility until the interactive smoke test below passes.
 - The host does not provide a cryptographically authenticated human identity to this server. The recorded actor label is provenance metadata, not an authenticated identity claim.
 - Local JSON files and cooperative locks are single-host state, not distributed transactions. Do not share the state directory across hosts or run multiple uncoordinated copies.
-- The active model can submit misleading evidence. Only independently captured output from a trusted runner can establish that a command/test actually ran.
+- The active model can submit misleading evidence. Persisted provenance distinguishes model assertions (`model_reported`), process observations (`runner_observed`), and review-engine results (`review_engine`). Provenance labels are not cryptographic attestations; only independently operated, trusted runner infrastructure can establish a stronger execution guarantee.
 - The hook cannot control tools or processes outside its configured native-tool matcher. Treat it as defense-in-depth, not a system-wide sandbox.
 
 ## Interactive smoke test required before production use

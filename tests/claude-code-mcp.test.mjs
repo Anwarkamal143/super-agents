@@ -335,3 +335,43 @@ test("MCP bridge rejects stale phase revisions without mutating the workflow", a
   assert.equal(current.run.revision, approved.run.revision);
   assert.equal(current.run.status, "running");
 });
+
+
+test("MCP bridge persists model-reported evidence provenance and never counts it as runner evidence", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-evidence-source-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "evidence-source" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Persist evidence provenance distinctly.",
+  });
+  assert.equal(plan.approved, true);
+  const submitted = await client.tool("factory_evidence_submit", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+    summary: "Model claims that tests passed.",
+    kind: "test",
+    outcome: "passed",
+  });
+  assert.equal(submitted.stored, true);
+  const persisted = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(persisted.evidence.at(-1).source, "model_reported");
+  assert.equal(persisted.evidence.at(-1).outcome, "passed");
+
+  const status = await client.tool("factory_delivery_status", { runId: created.run.id });
+  assert.equal(status.modelReportedEvidenceCount, 1);
+  assert.equal(status.runnerObservedEvidenceCount, 0);
+  assert.equal(status.modelReportedEvidencePassed, true);
+  assert.equal(status.runnerObservedEvidencePassed, false);
+  assert.equal(status.readyForHumanDelivery, false);
+});

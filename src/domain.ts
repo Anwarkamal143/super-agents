@@ -89,7 +89,11 @@ export interface FactoryArtifact {
 export type EvidenceKind = "command" | "test" | "typecheck" | "approval" | "review" | "other";
 export type EvidenceOutcome = "passed" | "failed" | "skipped" | "unknown";
 
+export type EvidenceSource = "model_reported" | "runner_observed" | "review_engine";
+
 export interface VerificationEvidence {
+  /** Provenance is persisted; a model assertion is never promoted to runner evidence. */
+  readonly source: EvidenceSource;
   readonly id: EvidenceId;
   readonly runId: RunId;
   readonly kind: EvidenceKind;
