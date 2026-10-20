@@ -83,3 +83,48 @@ test("a confirmed dead lock owner is reclaimed before the operation runs", async
     await assert.rejects(stat(lockPath), { code: "ENOENT" });
   });
 });
+
+test("a live lock owner is preserved when a competing acquisition times out", async () => {
+  await withDirectory(async (directory) => {
+    const lockPath = path.join(directory, "workflow.lock");
+    let signalOwnerStarted;
+    let releaseOwner;
+    const ownerStarted = new Promise((resolve) => {
+      signalOwnerStarted = resolve;
+    });
+    const ownerRelease = new Promise((resolve) => {
+      releaseOwner = resolve;
+    });
+
+    const ownerTask = withFileLock(lockPath, async () => {
+      signalOwnerStarted();
+      await ownerRelease;
+    });
+
+    let competingOperationStarted = false;
+    try {
+      await ownerStarted;
+      const originalRecord = await readFile(lockPath, "utf8");
+
+      await assert.rejects(
+        withFileLock(
+          lockPath,
+          async () => {
+            competingOperationStarted = true;
+          },
+          { timeoutMs: 40, retryMs: 2 },
+        ),
+        /Timed out acquiring file lock/,
+      );
+
+      assert.equal(competingOperationStarted, false);
+      assert.equal(await readFile(lockPath, "utf8"), originalRecord);
+      assert.equal(JSON.parse(originalRecord).pid, process.pid);
+    } finally {
+      releaseOwner();
+      await ownerTask;
+    }
+
+    await assert.rejects(stat(lockPath), { code: "ENOENT" });
+  });
+});
