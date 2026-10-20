@@ -339,7 +339,6 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   cancelListener = () => stop("cancelled");
   signal?.addEventListener("abort", cancelListener, { once: true });
   timer = setTimeout(() => stop("timed_out"), timeoutMs);
-  timer.unref();
   return resultPromise;
 }
 
