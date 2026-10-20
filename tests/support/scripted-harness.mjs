@@ -16,8 +16,8 @@ export class ScriptedHarnessAdapter {
     return {
       harnessId: this.id,
       available: true,
-      supported: ["prompt-invocation", "cancellation", "timeouts", "bounded-output"],
-      unsupported: ["structured-output", "parallel-agents"],
+      supported: ["prompt-invocation", "bounded-output"],
+      unsupported: ["structured-output", "cancellation", "timeouts", "parallel-agents"],
       detectedAt: new Date().toISOString(),
     };
   }
