@@ -1,0 +1,82 @@
+{
+  "schemaVersion": 1,
+  "factory": {
+    "id": "sample-default-greeting",
+    "title": "Example: add a default greeting",
+    "request": "Demonstrate planning only. Do not implement until the human approves the exact plan.",
+    "orchestrator": "current-session",
+    "createdAt": "2026-10-20T00:00:00.000Z"
+  },
+  "status": "awaiting_approval",
+  "updatedAt": "2026-10-20T00:00:00.000Z",
+  "tasks": [
+    {
+      "id": "inspect",
+      "title": "Inspect sample repository",
+      "description": "Read the README, package manifest, source, tests, and feature request; infer checks from the manifest.",
+      "status": "ready",
+      "dependsOn": [],
+      "acceptanceCriteria": [
+        "Existing greeting behavior and test command are confirmed from files.",
+        "No project scripts are run before the verification plan is approved."
+      ],
+      "owner": "orchestrator",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": []
+    },
+    {
+      "id": "plan",
+      "title": "Propose bounded implementation plan",
+      "description": "Plan the default argument, focused tests, exact verification, and review steps.",
+      "status": "pending",
+      "dependsOn": [
+        "inspect"
+      ],
+      "acceptanceCriteria": [
+        "Plan includes acceptance criteria, non-goals, file scope, and exact check command.",
+        "Plan is presented to the human before implementation."
+      ],
+      "owner": "orchestrator",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": []
+    },
+    {
+      "id": "implement",
+      "title": "Implement approved default greeting",
+      "description": "Illustrative only; remain blocked until explicit approval of the exact plan.",
+      "status": "needs_approval",
+      "dependsOn": [
+        "plan"
+      ],
+      "acceptanceCriteria": [
+        "No argument returns Hello, world!.",
+        "Named greeting behavior remains unchanged and focused tests cover both paths."
+      ],
+      "owner": "implementation-agent",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": [],
+      "approvalRequired": true
+    },
+    {
+      "id": "verify",
+      "title": "Run approved verification and reviews",
+      "description": "Run only the approved check, inspect actual output, and perform separate Standards and Spec reviews.",
+      "status": "pending",
+      "dependsOn": [
+        "implement"
+      ],
+      "acceptanceCriteria": [
+        "The exact approved test command exits successfully and evidence is recorded.",
+        "Standards and Spec findings are reported separately; failed or skipped checks are not called passed."
+      ],
+      "owner": "orchestrator",
+      "attempts": 0,
+      "maxAttempts": 1,
+      "evidence": []
+    }
+  ],
+  "decisions": []
+}
