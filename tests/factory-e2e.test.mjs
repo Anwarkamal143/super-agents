@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -90,6 +90,9 @@ test("composed workflow persists approval, verification, both reviews, and stops
     "created", "ready", "running", "awaiting_approval", "running", "verifying", "reviewing", "completed",
   ]);
   assert.equal(persisted.steps["implement-approved-plan"].status, "succeeded");
+  assert.equal(persisted.steps["verification"].status, "succeeded");
+  assert.equal(persisted.steps["independent-review"].status, "succeeded");
+  assert.deepEqual(persisted.evidence.map((item) => item.kind), ["command", "review"]);
   const audit = await state.approvals.listAuditEvents();
   assert.equal(audit.filter((event) => event.kind === "authorization_granted").length, 2);
   assert.equal(audit.some((event) => JSON.stringify(event).includes("Implement the approved example export.")), false);
