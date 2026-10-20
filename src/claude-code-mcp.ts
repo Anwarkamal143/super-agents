@@ -59,6 +59,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   let nextId = 0;
   let clientElicitation = false;
   const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
+  const requestControllers = new Map<string | number, AbortController>();
 
   const send = (message: RpcMessage) => { output.write(JSON.stringify(message) + "\n"); };
   const rpcRequest = (method: string, params: JsonObject, parentRequestId?: string | number): Promise<RpcMessage> => new Promise((resolve, reject) => {
@@ -98,7 +99,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     return { action, ...(content ? { content } : {}) };
   };
 
-  const callTool = async (name: string, args: JsonObject, parentRequestId?: string | number): Promise<unknown> => {
+  const callTool = async (name: string, args: JsonObject, parentRequestId?: string | number, signal?: AbortSignal): Promise<unknown> => {
     switch (name) {
       case "factory_session_create": {
         const requestId = requireString(args, "requestId");
@@ -192,7 +193,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           const parsed: unknown = JSON.parse(rawProfile);
           const value = requireObject(parsed, "FACTORY_VERIFICATION_PROFILE");
           if (!Array.isArray(value["checks"]) || value["checks"].length === 0) throw new TypeError("checks must be a non-empty array.");
-          const allowedExecutables = requireObject(value["allowedExecutables"], "allowedExecutables") as Record<string, string>;
+          const allowedExecutables = requireObject(value["allowedExecutables"], "allowedExecutables") as unknown as Record<string, string>;
           if (Object.values(allowedExecutables).some((executable) => typeof executable !== "string" || !path.isAbsolute(executable))) {
             throw new TypeError("allowedExecutables must map stable IDs to absolute executable paths.");
           }
@@ -205,6 +206,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           repositoryRoot: cwd,
           checks: profile.checks,
           allowedExecutables: profile.allowedExecutables,
+          signal,
           authorize: async (_actionType, payload) => {
             const approval = await requestHuman(
               `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
@@ -299,6 +301,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       if (message.method === "notifications/initialized") return;
       if (message.method === "notifications/cancelled") {
         const cancelledRequestId = message.params?.["requestId"];
+        if ((typeof cancelledRequestId === "string" || typeof cancelledRequestId === "number") && requestControllers.has(cancelledRequestId)) {
+          requestControllers.get(cancelledRequestId)!.abort();
+        }
         for (const [elicitationId, request] of pending) {
           if (request.parentRequestId === cancelledRequestId) {
             pending.delete(elicitationId);
@@ -316,8 +321,14 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           const params = message.params ?? {};
           const name = requireString(params, "name");
           const args = params["arguments"] === undefined ? {} : requireObject(params["arguments"], "arguments");
-          const result = await callTool(name, args, message.id);
-          send({ jsonrpc: "2.0", id: message.id, result: textResult(result) });
+          const controller = new AbortController();
+          if (message.id !== undefined) requestControllers.set(message.id, controller);
+          try {
+            const result = await callTool(name, args, message.id, controller.signal);
+            send({ jsonrpc: "2.0", id: message.id, result: textResult(result) });
+          } finally {
+            if (message.id !== undefined) requestControllers.delete(message.id);
+          }
         } catch (error) {
           send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "Tool failed closed." }] } });
         }
