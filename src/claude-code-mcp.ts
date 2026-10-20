@@ -178,7 +178,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const started = await orchestrator.beginStep(runId, stepId);
         if (started.status !== "started") throw new WorkflowConflictError("Could not create evidence step.");
         await orchestrator.finishStep(runId, stepId, outcome === "failed" ? "failed" : "succeeded", summary, {
-          id: randomUUID(), runId, kind, outcome, summary, observedAt: new Date().toISOString(), artifactIds: [],
+          id: randomUUID(), runId, source: "model_reported", kind, outcome, summary, observedAt: new Date().toISOString(), artifactIds: [],
         });
         return { stored: true, trust: "model-reported-unverified", run: await orchestrator.getWorkflow(runId) };
       }
