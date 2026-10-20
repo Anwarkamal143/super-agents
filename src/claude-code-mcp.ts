@@ -38,7 +38,7 @@ export interface FactoryMcpServerOptions {
 
 export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {}): Promise<void> {
   const cwd = process.cwd();
-  const stateDirectory = path.resolve(cwd, options.stateDirectory ?? process.env.FACTORY_STATE_DIR ?? ".factory-state");
+  const stateDirectory = path.resolve(cwd, options.stateDirectory ?? process.env["FACTORY_STATE_DIR"] ?? ".factory-state");
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
   const orchestrator = new WorkflowOrchestrator(new JsonFileWorkflowStore(path.join(stateDirectory, "workflows.json")));
   const approvals = new ApprovalPolicy(new JsonFileApprovalStore(path.join(stateDirectory, "approvals.json")));
