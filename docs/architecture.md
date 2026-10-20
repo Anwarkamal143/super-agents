@@ -47,7 +47,7 @@ Portable domain contracts <--- Audit events
 
 The initial orchestrator uses a JSON file store with temporary-file replacement and a serialized command queue. Every accepted transition is validated by the portable lifecycle contract, appended to an event history, and persisted before the API resolves. A failed load or save rejects the operation. Callers provide the expected run revision so stale competing transitions are rejected rather than silently overwritten.
 
-Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded steps are reported as already completed and running steps are reported as already running; neither is automatically executed again. A running step after interruption requires explicit recovery policy before it can be retried. This first slice serializes operations through one orchestrator instance; the JSON store is not a multi-process transactional database and must not be used for concurrent writers across processes.
+Steps are persisted as `running`, `succeeded`, or `failed`. On resume, succeeded steps are reported as already completed and running steps are reported as already running; neither is automatically executed again. A running step after interruption requires explicit recovery policy before it can be retried. Operations are serialized within an orchestrator and file-backed transactions use a cooperative same-host lock across instances/processes. This is not a distributed lock or a transactional database; do not use it across hosts or filesystems without reliable exclusive-create semantics.
 
 ## Harness adapter contract
 
@@ -84,3 +84,18 @@ A manifest is portable declarative metadata with a schema version, stable lowerc
 Capability discovery compares required capabilities against the adapter's reported capabilities before a manifest can be considered compatible. Missing capabilities are returned explicitly so orchestration can block or ask for a different adapter rather than silently degrading.
 
 Registry changes are explicit `add`, `modify`, or `remove` operations. Each successful operation returns a secret-free audit event containing actor, timestamp, manifest ID, operation, and relevant versions. The caller must durably persist both the updated registry and audit event before reporting success; this module does not claim to provide storage transactions or authenticate the actor. Third-party content remains untrusted regardless of its declared trust label, and trust labels do not grant execution or approval rights.
+
+## Recovery, concurrency, and audit trail
+
+File-backed workflow and approval operations hold a cooperative exclusive-create lock across the complete read/validate/write transaction, not just the final file replacement. This prevents two instances on the same host from both consuming one approval or accepting the same expected workflow revision. Lock acquisition has a bounded wait and fails closed. A lock is reclaimed only when its recorded local PID is confirmed dead; malformed/unidentifiable lock metadata is not guessed stale. These locks are same-host coordination only, not distributed consensus, and the JSON stores are not suitable for multi-host writers.
+
+When a process restarts, persisted steps still marked `running` are not replayed automatically. The recovery boundary must call `recoverInterruptedSteps`, which marks those steps `interrupted` and appends ordered audit events. A caller must reconcile the external system and then explicitly choose to confirm success, confirm failure, or retry. Retry requires an explicit `externalEffectReconciled: true` assertion and increments the attempt count. This is a caller-supplied safety assertion, not proof of external state; production integrations should make the reconciliation evidence auditable and enforce the action's approval policy before retry.
+
+Workflow audit events cover run transitions, step starts/finishes, interruption, and reconciliation. Free-form step summaries and reconciliation reasons are represented in audit events by SHA-256 digests rather than copied into the audit trail. The step record still retains its operational summary, so callers must not place credentials or secrets in summaries. Approval audit events retain action type, payload digest, actor, timestamp, and outcome metadata, never raw payloads or rationale. Audit events are append-only by convention within each persisted snapshot; tamper-evident external retention and multi-host transactional durability remain out of scope for this JSON persistence slice.
+
+Recovery semantics:
+- **Crash before a step starts:** no `running` record exists; the step can start normally.
+- **Crash while a step is running:** on recovery, mark it `interrupted`; do not assume the side effect did not happen.
+- **Crash after the external side effect but before result persistence:** treat as ambiguous and reconcile against the external system before retrying.
+- **Crash after the result is persisted:** a succeeded step is not started again; failed steps may be deliberately retried according to workflow policy.
+- **Concurrent stale transition/approval use:** the file lock serializes the transaction; expected revision checks and one-time approval consumption reject the loser.
