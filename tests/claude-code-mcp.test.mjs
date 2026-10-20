@@ -925,3 +925,53 @@ test("MCP verification persists a non-zero process result as failed runner evide
   assert.equal(delivery.runnerObservedEvidencePassed, false);
   assert.equal(delivery.readyForHumanDelivery, false);
 });
+
+
+test("cancelling a pending verification approval prevents the process from starting", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-cancel-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "cancelled-check",
+      kind: "command",
+      executable: "node",
+      args: ["-e", "require('node:fs').writeFileSync('cancelled-check-ran.txt', 'ran')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-cancel-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-cancel" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Verify host cancellation blocks a pending verification process.",
+  });
+  assert.equal(plan.approved, true);
+
+  client.setElicitationDecision("none");
+  const pending = client.request("tools/call", {
+    name: "factory_verification_run",
+    params: {},
+    arguments: { runId: created.run.id, expectedRevision: plan.run.revision },
+  });
+  const elicitation = await client.nextElicitation();
+  client.notifyCancelled(pending.requestId);
+  const response = await pending;
+  assert.equal(response.error, undefined);
+  const item = response.result?.content?.find((entry) => entry.type === "text");
+  const report = JSON.parse(item.text);
+  assert.equal(report.status, "incomplete");
+  assert.equal(report.checks[0].status, "blocked");
+  await assert.rejects(import("node:fs/promises").then(({ stat }) => stat(path.join(cwd, "cancelled-check-ran.txt"))), { code: "ENOENT" });
+});
