@@ -80,9 +80,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       requestedSchema: { type: "object", properties: { decision: { type: "string", enum: ["approve", "decline"] } }, required: ["decision"], additionalProperties: false },
     });
     const result = response.result as JsonObject | undefined;
-    const action = result?.action;
+    const action = result?.["action"];
     if (action !== "accept" && action !== "decline" && action !== "cancel") throw new Error("Malformed elicitation response; action blocked.");
-    const content = result?.content && typeof result.content === "object" ? result.content as JsonObject : undefined;
+    const content = result?.["content"] && typeof result.content === "object" ? result.content as JsonObject : undefined;
     return { action, ...(content ? { content } : {}) };
   };
 
@@ -119,7 +119,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           await orchestrator.transition(runId, "cancelled", run.revision);
           return { approved: false, blocked: true, reason: error instanceof Error ? error.message : "Elicitation failed." };
         }
-        if (response.action !== "accept" || response.content?.decision !== "approve") {
+        if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
           const cancelled = await orchestrator.transition(runId, "cancelled", run.revision);
           return { approved: false, blocked: true, run: cancelled, reason: "Human approval was declined, cancelled, or malformed." };
         }
@@ -143,13 +143,13 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         if (record.run.status !== "running" && record.run.status !== "verifying" && record.run.status !== "reviewing") throw new WorkflowConflictError("Consequential actions are only approvable during an active workflow phase.");
         const actionType = requireString(args, "actionType") as ConsequentialAction;
         const toolName = requireString(args, "toolName");
-        const toolInput = requireObject(args.toolInput, "toolInput");
+        const toolInput = requireObject(args["toolInput"], "toolInput");
         const reason = requireString(args, "reason");
         if (!((actionType === "file.write" && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) || (actionType === "command.execute" && toolName === "Bash"))) throw new TypeError("Action type does not match the native tool.");
         const payload = { toolName, toolInput };
         const digest = digestPayload(payload);
         const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`);
-        if (response.action !== "accept" || response.content?.decision !== "approve") {
+        if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
           return { approved: false, blocked: true, reason: "Human declined, cancelled, or did not explicitly approve this exact action." };
         }
         // Elicitation gives a human decision; the host does not expose a cryptographically authenticated actor identity.
@@ -203,7 +203,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "This minimal bridge supports only MCP protocol 2025-11-25 elicitation. Upgrade the bridge before using a host that negotiates another protocol." } });
           return;
         }
-        clientElicitation = Boolean(capabilities?.elicitation && typeof capabilities.elicitation === "object" && (capabilities.elicitation as JsonObject).form);
+        clientElicitation = Boolean(capabilities?.["elicitation"] && typeof capabilities.elicitation === "object" && (capabilities["elicitation"] as JsonObject)["form"]);
         send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. This server supports only MCP 2025-11-25 elicitation. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
         return;
       }
@@ -216,7 +216,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         try {
           const params = message.params ?? {};
           const name = requireString(params, "name");
-          const args = params.arguments === undefined ? {} : requireObject(params.arguments, "arguments");
+          const args = params["arguments"] === undefined ? {} : requireObject(params["arguments"], "arguments");
           const result = await callTool(name, args);
           send({ jsonrpc: "2.0", id: message.id, result: textResult(result) });
         } catch (error) {
