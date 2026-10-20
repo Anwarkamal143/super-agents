@@ -375,3 +375,41 @@ test("MCP bridge persists model-reported evidence provenance and never counts it
   assert.equal(status.runnerObservedEvidencePassed, false);
   assert.equal(status.readyForHumanDelivery, false);
 });
+
+
+test("PreToolUse hook fails closed for malformed input and corrupt approval persistence", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-fail-closed-"));
+  t.after(async () => { await rm(cwd, { recursive: true, force: true }); });
+  const state = path.join(cwd, ".factory-state");
+  await import("node:fs/promises").then(({ mkdir, writeFile }) => mkdir(state, { recursive: true }));
+  await import("node:fs/promises").then(({ writeFile }) => writeFile(path.join(state, "approvals.json"), '{"approvals":"not-an-array","events":[]}'));
+  const corrupt = await runHook(cwd, "Write", { file_path: "/tmp/blocked.txt", content: "blocked" });
+  assert.equal(corrupt.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(corrupt.hookSpecificOutput.permissionDecisionReason, /failed closed|denied/i);
+
+  const child = spawn(process.execPath, [hookEntry], {
+    cwd,
+    env: { ...process.env, FACTORY_STATE_DIR: ".factory-state" },
+    stdio: ["pipe", "pipe", "pipe"],
+  });
+  let stdout = "";
+  child.stdout.on("data", (chunk) => { stdout += chunk.toString(); });
+  const exit = new Promise((resolve, reject) => {
+    child.once("error", reject);
+    child.once("close", resolve);
+  });
+  child.stdin.end("{not-json");
+  const code = await exit;
+  assert.equal(code, 0);
+  const malformed = JSON.parse(stdout);
+  assert.equal(malformed.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(malformed.hookSpecificOutput.permissionDecisionReason, /Malformed/);
+});
+
+test("PreToolUse hook denies when no approval state exists", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-no-state-"));
+  t.after(async () => { await rm(cwd, { recursive: true, force: true }); });
+  const result = await runHook(cwd, "Bash", { command: "echo not-approved" });
+  assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /No active one-time human approval/);
+});
