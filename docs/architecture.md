@@ -74,3 +74,10 @@ Verification executes only explicitly configured checks whose executable identif
 Each result records command identity, exit status, timestamps, duration, bounded stdout/stderr, SHA-256 digests of the complete observed streams, observed byte counts, and truncation. Passed, failed, skipped, timed-out, cancelled, and blocked checks are distinct; skipped or blocked checks never count as passed. The runner inherits only an explicit environment-key allowlist and never copies environment values into evidence. A complete verification report is passing only when every configured check passed.
 
 The runner does not itself establish human identity or create approvals. Its authorization callback must be wired to the trusted approval policy and a previously recorded approval scoped to that exact check. Configured command arguments remain trusted configuration and should be reviewed as code.
+
+
+## Independent review and bounded repair
+
+Standards review and Spec review are separate structured reports over the same pinned base/head commit pair and SHA-256 diff digest. Review input requires an originating issue/spec identifier, a non-empty diff, valid full commit IDs, and repository standards. A missing spec is reported explicitly and blocks a passing aggregate; the factory does not invent acceptance requirements. Malformed review output, mismatched axes, unsafe finding paths, and inconsistent passing reports fail closed.
+
+Repair is a bounded coordinator, not an autonomous permission source. Each repair attempt requires a separate authorization callback; after applying a repair, verification must pass for the exact returned diff and fixed point before either review axis runs again. A failed, incomplete, or mismatched verification blocks the loop. Repair limits are explicitly configured and capped; exhausting the limit returns a blocked result for human intervention. The coordinator does not authenticate the human approver or execute verification itself—callers must wire those callbacks to the trusted approval policy and verification runner.

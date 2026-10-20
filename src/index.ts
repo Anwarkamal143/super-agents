@@ -10,3 +10,4 @@ export * from "./harness.js";
 export * from "./claude-code.js";
 export * from "./approval.js";
 export * from "./verification.js";
+export * from "./review.js";
