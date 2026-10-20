@@ -86,7 +86,7 @@ test("composed workflow persists approval, verification, both reviews, and stops
 
   const persisted = await state.orchestrator.getWorkflow(state.run.id);
   assert.equal(persisted.run.status, "completed");
-  assert.deepEqual(persisted.events.map((event) => event.to), [
+  assert.deepEqual(persisted.events.filter((event) => event.kind === "transition").map((event) => event.to), [
     "created", "ready", "running", "awaiting_approval", "running", "verifying", "reviewing", "completed",
   ]);
   assert.equal(persisted.steps["implement-approved-plan"].status, "succeeded");
