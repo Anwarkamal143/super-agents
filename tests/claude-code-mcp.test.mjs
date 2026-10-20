@@ -413,3 +413,45 @@ test("PreToolUse hook denies when no approval state exists", async (t) => {
   assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
   assert.match(result.hookSpecificOutput.permissionDecisionReason, /No active one-time human approval/);
 });
+
+
+test("PreToolUse hook allows at most one concurrent consumer of a one-time approval", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-concurrent-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "concurrent-hook-consume" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve one exact fixture action and verify concurrent replay is denied.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/concurrent-approved.txt", content: "only one consumer" };
+  const approval = await client.tool("factory_action_request_approval", {
+    runId: created.run.id,
+    actionType: "file.write",
+    toolName: "Write",
+    toolInput,
+    reason: "Exercise the one-time approval under concurrent hook invocation.",
+  });
+  assert.equal(approval.approved, true);
+
+  const results = await Promise.all([
+    runHook(cwd, "Write", toolInput),
+    runHook(cwd, "Write", toolInput),
+  ]);
+  const allowed = results.filter((result) => Object.keys(result).length === 0);
+  const denied = results.filter((result) => result.hookSpecificOutput?.permissionDecision === "deny");
+  assert.equal(allowed.length, 1, JSON.stringify(results));
+  assert.equal(denied.length, 1, JSON.stringify(results));
+});
