@@ -4,7 +4,7 @@ An agent-agnostic, approval-gated software factory foundation for repository dis
 
 ## Project status
 
-The core library, a composed approval-gated workflow API, and the first Claude Code `/factory` skill template are available. The repository is **not yet a complete interactive CLI or production orchestration service**: the slash-command prompt is not automatically connected to the TypeScript workflow API. A host bridge must invoke `runFactoryWorkflow` and provide a real human approval callback; see the [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24).
+The core library, a composed approval-gated workflow API, and the first Claude Code `/factory` skill template are available. The repository is **not yet a complete interactive CLI or production orchestration service**: the slash-command prompt is not automatically connected to the TypeScript workflow API. A host bridge must invoke the workflow and provide genuine human approval. The owner selected an active-session MCP bridge architecture; see the [bridge decision and security contract](docs/claude-code-host-bridge.md) and [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24).
 
 ## Requirements and setup
 
@@ -26,7 +26,7 @@ The package is private by default and is not published to npm. To build and insp
 
 Copy `.claude/skills/factory/SKILL.md` into the target repository at the same path, and copy `factory/board.schema.json` and `factory/board.example.json` into a `factory/` directory. See [the usage guide](docs/usage.md) for the exact install commands and first-run example.
 
-In Claude Code, run `/factory <request>`. The skill instructs the current session to inspect the target repository, propose acceptance criteria and a dependency-aware plan, and wait for explicit approval before implementation. It requires the current session to be the only writer of `factory/board.json`; subagents return bounded results and never approve, merge, or deploy. This slash command is still prompt-guided; it does not automatically call the library API. Host integrations can compose the executable workflow with `runFactoryWorkflow`, but must provide a real approval UI and host-level controls.
+In Claude Code, run `/factory <request>`. The skill instructs the current session to inspect the target repository, propose acceptance criteria and a dependency-aware plan, and wait for explicit approval before implementation. It requires the current session to be the only writer of `factory/board.json`; subagents return bounded results and never approve, merge, or deploy. This slash command is still prompt-guided; it does not automatically call the library API. The selected active-session MCP bridge is tracked in [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38); it is not yet claimed to be implemented or interactively verified.
 
 For a complete, safe practice run, follow the [sample target repository walkthrough](docs/example-walkthrough.md) and inspect the self-contained [example project](examples/sample-target/).
 
@@ -50,6 +50,7 @@ The skill is an instruction contract, not a security sandbox. JSON stores and co
 ## Documentation
 
 - [Usage and /factory installation](docs/usage.md)
+- [Claude Code active-session bridge decision and security contract](docs/claude-code-host-bridge.md)
 - [Package distribution, install, upgrade, and rollback](docs/release.md)
 - [Adding a harness adapter](docs/harness-adapters.md)
 - [Example target repository and end-to-end walkthrough](docs/example-walkthrough.md)
