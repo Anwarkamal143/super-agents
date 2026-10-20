@@ -57,7 +57,7 @@ export interface FactoryRunResult {
  * this function never creates a PR, merges, deploys, or publishes.
  */
 export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<FactoryRunResult> {
-  let run = await options.orchestrator.createRun(options.run);
+  let run = (await options.orchestrator.createRun(options.run)).run;
   const transition = async (status: WorkflowStatus) => {
     run = await options.orchestrator.transition(run.id, status, run.revision);
   };
