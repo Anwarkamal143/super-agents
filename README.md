@@ -16,7 +16,7 @@ npm ci
 npm run check
 ```
 
-The default test suite does not require a Claude Code installation.
+The default test suite includes deterministic Claude adapter smoke coverage and does not require a Claude Code installation. An optional real-CLI smoke test is documented in [the usage guide](docs/usage.md).
 
 ## Invoke /factory in another repository
 

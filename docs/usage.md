@@ -120,3 +120,35 @@ The skill is an orchestration instruction contract, not a security sandbox or an
 - [Security model overview](security-model.md)
 - [Contributing and PR review contract](../CONTRIBUTING.md)
 - [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)
+
+
+## Claude Code harness smoke test
+
+The default `npm run check` includes deterministic smoke coverage for the actual exported `ClaudeCodeAdapter`, the installed `/factory` skill contract, and the example board. It uses an injected fake process and requires no Claude installation, credentials, or network access. It verifies the adapter's success path and confirms that missing executables, timeouts, non-zero exits, and truncated output are not represented as successful execution.
+
+### Optional live CLI smoke test
+
+This is deliberately opt-in. It invokes your locally installed Claude CLI and may use your configured account/session. Run it only when you intend to test the real adapter.
+
+Prerequisites:
+- Node.js 22+ and dependencies installed with `npm ci`.
+- Claude Code installed and authenticated according to its official setup instructions.
+- Review the smoke prompt and confirm that the CLI invocation is acceptable for your account/environment.
+
+From the repository root:
+
+```sh
+npm run build
+CLAUDE_CODE_INTEGRATION=1 node --test tests/harness.test.mjs
+```
+
+The test creates a unique temporary directory, asks Claude to return the literal `adapter-integration-ok`, verifies the adapter result, and removes the temporary directory in a `finally` block. It does not ask Claude to edit a project, run project scripts, push, create a PR, merge, or deploy. Expected result: the integration test passes and its output contains `adapter-integration-ok`. If Claude CLI is missing, unauthenticated, or lacks print-mode support, the test fails rather than reporting a pass.
+
+Troubleshooting:
+- **CLI missing/spawn error:** install or correct the CLI path; default deterministic tests still run.
+- **Print mode unsupported:** update Claude Code or inspect `claude --help`; the adapter fails closed when `-p/--print` is not advertised.
+- **Non-zero exit:** inspect the returned exit code and stderr; it is a failed result.
+- **Timeout/cancellation:** check CLI responsiveness and choose an intentional timeout; these remain distinct non-success outcomes.
+- **Output truncated:** raise the configured byte limit only if the caller's policy permits it; truncation is explicitly marked and the output limit is not silently bypassed.
+
+A live smoke pass proves only that this CLI adapter can invoke a bounded prompt in an isolated directory. It does not prove that the model follows the full factory workflow, that approval gates are enforced outside the prompt, or that production integrations are secure.
