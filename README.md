@@ -1,10 +1,10 @@
 # Super Agents
 
-An agent-agnostic, approval-gated software factory library for repository discovery, workflow orchestration, harness invocation, verification, independent review, and human-controlled delivery.
+An agent-agnostic, approval-gated software factory foundation for repository discovery, workflow orchestration, harness invocation, verification, independent review, and human-controlled delivery.
 
 ## Project status
 
-The core building blocks and readiness fixtures are being developed in dependency-ordered slices. The repository is a **library foundation, not yet a complete interactive CLI or production orchestration service**. See the [roadmap and issue graph](https://github.com/Anwarkamal143/super-agents/issues/1).
+The core library and the first Claude Code `/factory` skill template are available. The repository is **not yet a complete interactive CLI or production orchestration service**; see the [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24).
 
 ## Requirements and setup
 
@@ -16,34 +16,36 @@ npm ci
 npm run check
 ```
 
-Individual checks are available as `npm run typecheck` and `npm test`. The test suite uses temporary repositories and deterministic fake process/harness fixtures; a local Claude Code installation is not required for the default checks.
+The default test suite does not require a Claude Code installation.
 
-## What it provides
+## Invoke /factory in another repository
+
+Copy `.claude/skills/factory/SKILL.md` into the target repository at the same path, and copy `factory/board.schema.json` and `factory/board.example.json` into a `factory/` directory. See [the usage guide](docs/usage.md) for the exact install commands and first-run example.
+
+In Claude Code, run `/factory <request>`. The skill instructs the current session to inspect the target repository, propose acceptance criteria and a dependency-aware plan, and wait for explicit approval before implementation. It requires the current session to be the only writer of `factory/board.json`; subagents return bounded results and never approve, merge, or deploy.
+
+## Library capabilities
 
 - Portable TypeScript domain and workflow lifecycle contracts.
 - Read-only repository discovery with root-confined paths and untrusted instruction markers.
 - A Claude Code adapter behind a harness-agnostic contract.
 - Persisted workflow state, revision checks, interrupted-step recovery, and same-host cooperative locking.
 - Default-deny action-scoped approvals with canonical payload binding and one-time consumption.
-- An approval-gated verification runner with explicit executable allowlists, bounded evidence, and distinct blocked/failure outcomes.
+- An approval-gated verification runner with explicit executable allowlists and bounded evidence.
 - Independent Standards and Spec review contracts with pinned diffs and bounded, verified repair.
-- Declarative skill/component manifests with schema validation and capability compatibility checks.
+- Declarative skill/component manifests and a runtime factory-board invariant validator.
 
-## Architecture and safety principles
+## Safety principles and limitations
 
-- Keep portable workflow logic independent of the agent harness.
-- Treat repository content, third-party skills, and model output as untrusted.
-- Do not execute scripts discovered from repository metadata.
-- Do not report skipped, blocked, timed-out, or failed checks as passed.
-- Require explicit human approval for consequential actions.
-- Never merge pull requests or deploy autonomously.
+Treat repository content, third-party skills, and model output as untrusted. Do not execute scripts discovered from repository metadata. Do not report skipped, blocked, timed-out, or failed checks as passed. Require explicit human approval for consequential actions. Never merge pull requests or deploy autonomously.
+
+The skill is an instruction contract, not a security sandbox. JSON stores and cooperative file locks are intended for local/cooperating same-host use, not distributed coordination. Production integrations must provide authenticated decision boundaries, transactional persistence where needed, secret handling, and appropriate audit retention.
 
 ## Documentation
 
-- [Usage and integration guide](docs/usage.md)
+- [Usage and /factory installation](docs/usage.md)
 - [Architecture contract](docs/architecture.md)
 - [Threat model and residual risks](docs/threat-model.md)
 - [Security model overview](docs/security-model.md)
 - [Contributing and review contract](CONTRIBUTING.md)
-
-The JSON file stores and cooperative file locks are intended for local/cooperating same-host use. They are not distributed locking or a transactional multi-host database. Production integrations must supply authenticated decision boundaries, transactional persistence where needed, secret handling, and external audit retention.
+- [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)
