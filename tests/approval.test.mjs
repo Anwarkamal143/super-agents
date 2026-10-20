@@ -105,7 +105,7 @@ test("denied decision cannot authorize and active approval can be revoked", asyn
     });
     assert.deepEqual(
       await policy.authorizeAndConsume("git.merge", { pullRequest: 42 }, denied.id, "runner"),
-      { allowed: false, reason: "replay" },
+      { allowed: false, reason: "denied" },
     );
 
     const approved = await policy.recordDecision({
@@ -151,7 +151,7 @@ test("JSON ledger survives reload and malformed persistence fails closed", async
     const reloaded = new ApprovalPolicy(new JsonFileApprovalStore(path.join(directory, "approvals.json")));
     assert.equal((await reloaded.listApprovals())[0].id, approval.id);
     assert.equal((await reloaded.authorizeAndConsume("git.branch.create", { branch: "feat/safe" }, approval.id, "runner")).allowed, true);
-    assert.equal((await policy.listApprovals())[0].status, "active"); // independent instances are not a multi-writer store
+    assert.equal((await policy.listApprovals())[0].status, "consumed");
   });
   const directory = await mkdtemp(path.join(os.tmpdir(), "super-agents-approval-corrupt-"));
   try {
