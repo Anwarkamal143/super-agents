@@ -73,6 +73,24 @@ test("factory smoke: installed skill, board contract, and Claude adapter compose
   assert.equal(invocation.options.shell, false);
 });
 
+test("sample target board is valid and starts unapproved with no recorded decisions", async () => {
+  const [boardText, manifestText, featureRequest] = await Promise.all([
+    readFile(path.join(root, "examples/sample-target/factory/board.example.json"), "utf8"),
+    readFile(path.join(root, "examples/sample-target/package.json"), "utf8"),
+    readFile(path.join(root, "examples/sample-target/FEATURE_REQUEST.md"), "utf8"),
+  ]);
+  const board = JSON.parse(boardText);
+  const manifest = JSON.parse(manifestText);
+  const validation = validateFactoryBoard(board);
+  assert.equal(validation.valid, true, validation.errors.join("\n"));
+  assert.equal(board.status, "awaiting_approval");
+  assert.equal(board.decisions.length, 0);
+  assert.ok(board.tasks.some((task) => task.status === "needs_approval" && task.approvalRequired));
+  assert.ok(board.tasks.every((task) => task.attempts === 0 && task.evidence.length === 0));
+  assert.equal(manifest.scripts.test, "node --test");
+  assert.match(featureRequest, /not authorization to implement/i);
+});
+
 test("factory smoke: missing CLI is unavailable, never a successful run", async () => {
   const adapter = new ClaudeCodeAdapter({
     executable: "/missing/claude",

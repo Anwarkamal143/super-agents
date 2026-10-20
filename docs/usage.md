@@ -36,6 +36,8 @@ Then open Claude Code at the target repository root and invoke:
 
 Claude Code discovers the skill from `.claude/skills/factory/SKILL.md`. The skill guides the current session to act as orchestrator. The first run should inspect the repository and present a plan; it must not treat invoking `/factory` as blanket approval to implement.
 
+For a complete example with expected artifacts, approval gates, verification, and a blocked-path exercise, follow the [sample target repository walkthrough](example-walkthrough.md).
+
 ## Board contract and single-writer rule
 
 - `factory/board.schema.json` is the JSON Schema interchange contract.
@@ -113,15 +115,6 @@ When a process restarts, first ensure the old worker has stopped. Call `recoverI
 
 The skill is an orchestration instruction contract, not a security sandbox or an autonomous daemon. A model may fail to follow instructions; integrations must enforce privileged operations outside the prompt where needed. Local JSON stores and cooperative file locks are same-host only. Human identity, secret redaction, external audit retention, and production multi-host transactions remain integration responsibilities.
 
-## More detail
-
-- [Architecture contract](architecture.md)
-- [Threat model and residual risk](threat-model.md)
-- [Security model overview](security-model.md)
-- [Contributing and PR review contract](../CONTRIBUTING.md)
-- [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)
-
-
 ## Claude Code harness smoke test
 
 The default `npm run check` includes deterministic smoke coverage for the actual exported `ClaudeCodeAdapter`, the installed `/factory` skill contract, and the example board. It uses an injected fake process and requires no Claude installation, credentials, or network access. It verifies the adapter's success path and confirms that missing executables, timeouts, non-zero exits, and truncated output are not represented as successful execution.
@@ -152,3 +145,12 @@ Troubleshooting:
 - **Output truncated:** raise the configured byte limit only if the caller's policy permits it; truncation is explicitly marked and the output limit is not silently bypassed.
 
 A live smoke pass proves only that this CLI adapter can invoke a bounded prompt in an isolated directory. It does not prove that the model follows the full factory workflow, that approval gates are enforced outside the prompt, or that production integrations are secure.
+
+## More detail
+
+- [Example target repository and end-to-end walkthrough](example-walkthrough.md)
+- [Architecture contract](architecture.md)
+- [Threat model and residual risk](threat-model.md)
+- [Security model overview](security-model.md)
+- [Contributing and PR review contract](../CONTRIBUTING.md)
+- [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)
