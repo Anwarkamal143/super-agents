@@ -24,6 +24,8 @@ Copy `.claude/skills/factory/SKILL.md` into the target repository at the same pa
 
 In Claude Code, run `/factory <request>`. The skill instructs the current session to inspect the target repository, propose acceptance criteria and a dependency-aware plan, and wait for explicit approval before implementation. It requires the current session to be the only writer of `factory/board.json`; subagents return bounded results and never approve, merge, or deploy.
 
+For a complete, safe practice run, follow the [sample target repository walkthrough](docs/example-walkthrough.md) and inspect the self-contained [example project](examples/sample-target/).
+
 ## Library capabilities
 
 - Portable TypeScript domain and workflow lifecycle contracts.
@@ -44,8 +46,9 @@ The skill is an instruction contract, not a security sandbox. JSON stores and co
 ## Documentation
 
 - [Usage and /factory installation](docs/usage.md)
+- [Example target repository and end-to-end walkthrough](docs/example-walkthrough.md)
 - [Architecture contract](docs/architecture.md)
 - [Threat model and residual risks](docs/threat-model.md)
 - [Security model overview](docs/security-model.md)
-- [Contributing and review contract](CONTRIBUTING.md)
+- [Contributing and PR review contract](CONTRIBUTING.md)
 - [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)
