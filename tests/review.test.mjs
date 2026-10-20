@@ -204,3 +204,26 @@ test("repair limits are bounded to a safe configured range", async () => {
     verify: async () => ({ status: "passed", baseCommit: base, headCommit: head, diff: "diff" }),
   }), /between 0 and 20/);
 });
+
+test("mismatched verification evidence cannot authorize a new review fixed point", async () => {
+  let reviews = 0;
+  const result = await reviewWithBoundedRepair({
+    initial: input(),
+    maxRepairAttempts: 2,
+    engine: {
+      reviewStandards: async () => { reviews++; return changes("standards"); },
+      reviewSpec: async () => passed("spec"),
+    },
+    authorizeRepair: async () => true,
+    repair: async () => input({ diff: "repaired", headCommit: "c".repeat(40) }),
+    verify: async (repaired) => ({
+      status: "passed",
+      baseCommit: repaired.baseCommit,
+      headCommit: repaired.headCommit,
+      diff: "different unverified diff",
+    }),
+  });
+  assert.equal(result.status, "blocked");
+  assert.equal(reviews, 1);
+  assert.match(result.reason, /did not match the repaired diff fixed point/);
+});
