@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -974,4 +974,126 @@ test("cancelling a pending verification approval prevents the process from start
   assert.equal(report.status, "incomplete");
   assert.equal(report.checks[0].status, "blocked");
   await assert.rejects(import("node:fs/promises").then(({ stat }) => stat(path.join(cwd, "cancelled-check-ran.txt"))), { code: "ENOENT" });
+});
+
+
+test("MCP bridge does not persist action approval when the workflow is cancelled during elicitation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stale-action-approval-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stale-action-approval" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve a plan before testing a stale action prompt.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/stale-approved.txt", content: "must remain blocked" };
+  client.setElicitationDecision("none");
+  const pendingAction = client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "The workflow may be cancelled while this prompt is open.",
+    },
+  });
+  const prompt = await client.nextElicitation();
+
+  const cancelled = await client.tool("factory_phase_transition", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+    to: "cancelled",
+  });
+  assert.equal(cancelled.status, "cancelled");
+  client.respondToElicitation(prompt.id, "accept");
+
+  const action = await pendingAction;
+  assert.equal(action.error, undefined, JSON.stringify(action.error));
+  const result = JSON.parse(action.result.content.find((entry) => entry.type === "text").text);
+  assert.equal(result.approved, false);
+  assert.equal(result.blocked, true);
+  assert.match(result.reason, /Workflow changed while approval was pending/);
+
+  const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.equal(
+    ledger.approvals.some((approval) => approval.outcome === "approved" && approval.status === "active"),
+    false,
+    "a stale prompt must not leave an active approved ledger record",
+  );
+  const denied = await runHook(cwd, "Write", toolInput);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
+});
+
+
+test("MCP bridge rejects an approval prompt when the workflow revision changes but remains active", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stale-active-action-approval-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stale-active-action-approval" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve a plan before testing a stale active-run prompt.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/stale-active-approved.txt", content: "must remain blocked" };
+  client.setElicitationDecision("none");
+  const pendingAction = client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "The workflow revision may advance while this prompt is open.",
+    },
+  });
+  const prompt = await client.nextElicitation();
+
+  const advanced = await client.tool("factory_phase_transition", {
+    runId: created.run.id,
+    expectedRevision: plan.run.revision,
+    to: "verifying",
+  });
+  assert.equal(advanced.status, "verifying");
+  client.respondToElicitation(prompt.id, "accept");
+
+  const action = await pendingAction;
+  assert.equal(action.error, undefined, JSON.stringify(action.error));
+  const result = JSON.parse(action.result.content.find((entry) => entry.type === "text").text);
+  assert.equal(result.approved, false);
+  assert.equal(result.blocked, true);
+  assert.match(result.reason, /Workflow changed while approval was pending/);
+
+  const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.equal(
+    ledger.approvals.some((approval) => approval.outcome === "approved" && approval.status === "active"),
+    false,
+    "a stale revision must not leave an active approved ledger record",
+  );
+  const denied = await runHook(cwd, "Write", toolInput);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
 });
