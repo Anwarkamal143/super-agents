@@ -165,7 +165,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         // Revalidate after the user prompt: the run may have been cancelled or
         // advanced while elicitation was pending. Never mint a stale approval.
         const latest = await orchestrator.getWorkflow(runId);
-        const stillActionable = latest !== null &&
+        const stillActionable = latest !== undefined && latest !== null &&
           latest.run.revision === record.run.revision &&
           (latest.run.status === "running" || latest.run.status === "verifying" || latest.run.status === "reviewing");
         if (!stillActionable) {
