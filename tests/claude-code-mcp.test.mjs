@@ -36,10 +36,12 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
       if (!line.trim()) continue;
       const message = JSON.parse(line);
       if (message.method === "elicitation/create") {
-        const waiter = elicitationWaiters.shift();
-        if (waiter) waiter(message);
-        else elicitationQueue.push(message);
-        if (currentDecision === "none") continue;
+        if (currentDecision === "none") {
+          const waiter = elicitationWaiters.shift();
+          if (waiter) waiter(message);
+          else elicitationQueue.push(message);
+          continue;
+        }
         child.stdin.write(JSON.stringify({
           jsonrpc: "2.0",
           id: message.id,
