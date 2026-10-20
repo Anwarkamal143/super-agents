@@ -182,7 +182,7 @@ function validateConfig(config: VerificationConfig): void {
     if (!Object.hasOwn(config.allowedExecutables, check.executable)) {
       throw new VerificationConfigError(`Check ${check.id} references an executable outside the allowlist.`);
     }
-    if (!Array.isArray(check.args) || check.args.some((arg) => typeof arg !== "string" || arg.includes("\0"))) {
+    if (!Array.isArray(check.args) || check.args.some((arg: unknown) => typeof arg !== "string" || arg.includes("\0"))) {
       throw new VerificationConfigError(`Check ${check.id} has invalid arguments.`);
     }
     if (check.timeoutMs !== undefined && (!Number.isSafeInteger(check.timeoutMs) || check.timeoutMs <= 0)) {
