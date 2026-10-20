@@ -258,3 +258,23 @@ test("successful checks continue, while an explicitly skipped check does not sto
     assert.deepEqual(report.checks.map((check) => check.status), ["passed", "skipped", "passed"]);
   });
 });
+
+
+test("timed-out check stops later approvals and leaves later checks explicitly skipped", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn({ neverClose: true });
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      checks: [
+        { id: "timeout", kind: "test", executable: "node", args: ["hang.js"], timeoutMs: 10 },
+        { id: "must-not-prompt", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => { authorizations.push(payload.checkId); return true; },
+    }));
+    assert.equal(report.status, "failed");
+    assert.deepEqual(authorizations, ["timeout"]);
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(report.checks.map((check) => check.status), ["timed_out", "skipped"]);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
