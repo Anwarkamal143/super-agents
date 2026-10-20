@@ -197,6 +197,7 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
   const reviewEvidence: VerificationEvidence = {
     id: `review-${run.id}`,
     runId: run.id,
+    source: "review_engine",
     kind: "review",
     outcome: review.status === "passed" ? "passed" : review.status === "changes_requested" ? "failed" : "unknown",
     summary: `Independent review ${review.status}; standards=${review.standards.status}, spec=${review.spec.status}.`,
