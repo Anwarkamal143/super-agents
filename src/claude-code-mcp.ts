@@ -151,10 +151,17 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const digest = digestPayload(payload);
         const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
         if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
+          await approvals.recordDecision({
+            actionType, payload, outcome: "denied", decidedBy: "claude-code-elicitation-host",
+            rationale: reason, scopeId: runId,
+          });
           return { approved: false, blocked: true, reason: "Human declined, cancelled, or did not explicitly approve this exact action." };
         }
         // Elicitation gives a human decision; the host does not expose a cryptographically authenticated actor identity.
-        const approval = await approvals.recordDecision({ actionType, payload, outcome: "approved", decidedBy: "claude-code-elicitation-host", rationale: "factory-run-id:" + runId + "\n" + reason });
+        const approval = await approvals.recordDecision({
+          actionType, payload, outcome: "approved", decidedBy: "claude-code-elicitation-host",
+          rationale: reason, scopeId: runId,
+        });
         return { approved: true, approvalId: approval.id, payloadDigest: digest, singleUse: true, actorIdentity: "host does not expose authenticated identity" };
       }
       case "factory_evidence_submit": {
