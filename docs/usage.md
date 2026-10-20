@@ -57,6 +57,8 @@ The package exposes building blocks, not a complete interactive CLI or productio
 | `discoverRepository` | Inspect repository metadata, declared scripts, and bounded instruction files | Read-only; instruction content is marked untrusted; scripts are not executed |
 | `WorkflowOrchestrator` | Persist runs, transitions, step markers, verification evidence, and recovery events | Caller controls the workflow; ambiguous running steps require recovery |
 | `HarnessAdapter` / `ClaudeCodeAdapter` | Invoke a harness through a portable contract | Capability detection is not approval; real CLI integration is opt-in |
+
+See [Adding a harness adapter](harness-adapters.md) for the portable interface, adapter responsibilities, and shared contract tests. The test suite runs the same contract assertions against the Claude adapter (using a fake process) and a scripted non-Claude fixture.
 | `ApprovalPolicy` | Record action-scoped decisions and consume them once | Human identity must be authenticated by the integrating application |
 | `runVerification` | Run explicitly configured checks and preserve bounded evidence | Absolute executable allowlist and exact-command authorization required |
 | `reviewPinnedDiff` / `reviewWithBoundedRepair` | Validate independent Standards/Spec reports and coordinate bounded repair | Reviewer output is untrusted; repair requires authorization and exact fixed-point verification |
