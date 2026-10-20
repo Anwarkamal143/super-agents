@@ -156,13 +156,7 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
     },
     });
   } catch (error) {
-    return failed(error instanceof Error ? error.message : "Verification could not complete.", {
-      repositoryRoot: options.verification.repositoryRoot,
-      startedAt: new Date().toISOString(),
-      finishedAt: new Date().toISOString(),
-      status: "incomplete",
-      checks: [],
-    });
+    return failed(error instanceof Error ? error.message : "Verification could not complete.");
   }
   if (verification.status !== "passed") {
     return failed(`Verification did not pass (status: ${verification.status}); review and delivery are blocked.`, verification);
