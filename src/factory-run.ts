@@ -4,7 +4,7 @@ import type { PinnedReviewInput, ReviewEngine } from "./review.js";
 import { reviewPinnedDiff } from "./review.js";
 import type { VerificationConfig, VerificationReport } from "./verification.js";
 import { runVerification } from "./verification.js";
-import type { WorkflowRun, WorkflowStatus } from "./domain.js";
+import type { VerificationEvidence, WorkflowRun, WorkflowStatus } from "./domain.js";
 import type { WorkflowOrchestrator } from "./orchestrator.js";
 
 export interface HumanApprovalRequest {
@@ -126,6 +126,10 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
   }
 
   await transition("verifying");
+  const verificationStep = await options.orchestrator.beginStep(run.id, "verification");
+  if (verificationStep.status !== "started") {
+    return failed(`Verification step cannot start safely (status: ${verificationStep.status}).`);
+  }
   let verification: VerificationReport;
   try {
     verification = await runVerification({
@@ -156,19 +160,51 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
     },
     });
   } catch (error) {
+    await options.orchestrator.recoverInterruptedSteps(run.id, "factory-orchestrator");
     return failed(error instanceof Error ? error.message : "Verification could not complete.");
   }
+  const verificationEvidence: VerificationEvidence = {
+    id: `verification-${run.id}`,
+    runId: run.id,
+    kind: "command",
+    outcome: verification.status === "passed" ? "passed" : verification.status === "failed" ? "failed" : "unknown",
+    summary: `Verification ${verification.status}; ${verification.checks.length} check(s) observed.`,
+    observedAt: verification.finishedAt,
+    artifactIds: [],
+  };
+  await options.orchestrator.finishStep(
+    run.id, "verification", verification.status === "passed" ? "succeeded" : "failed",
+    verificationEvidence.summary, verificationEvidence,
+  );
   if (verification.status !== "passed") {
     return failed(`Verification did not pass (status: ${verification.status}); review and delivery are blocked.`, verification);
   }
 
   await transition("reviewing");
+  const reviewStep = await options.orchestrator.beginStep(run.id, "independent-review");
+  if (reviewStep.status !== "started") {
+    return failed(`Review step cannot start safely (status: ${reviewStep.status}).`, verification);
+  }
   let review: Awaited<ReturnType<typeof reviewPinnedDiff>>;
   try {
     review = await reviewPinnedDiff(reviewInput, options.reviewEngine);
   } catch (error) {
+    await options.orchestrator.recoverInterruptedSteps(run.id, "factory-orchestrator");
     return failed(error instanceof Error ? error.message : "Review failed.", verification);
   }
+  const reviewEvidence: VerificationEvidence = {
+    id: `review-${run.id}`,
+    runId: run.id,
+    kind: "review",
+    outcome: review.status === "passed" ? "passed" : review.status === "changes_requested" ? "failed" : "unknown",
+    summary: `Independent review ${review.status}; standards=${review.standards.status}, spec=${review.spec.status}.`,
+    observedAt: new Date().toISOString(),
+    artifactIds: [],
+  };
+  await options.orchestrator.finishStep(
+    run.id, "independent-review", review.status === "passed" ? "succeeded" : "failed",
+    reviewEvidence.summary, reviewEvidence,
+  );
   if (review.status !== "passed") {
     return failed(`Independent review did not pass (status: ${review.status}); delivery is blocked.`, verification, review);
   }
