@@ -7,11 +7,33 @@
   "engines": {
     "node": ">=22"
   },
+  "files": [
+    "dist/",
+    "factory/",
+    "docs/",
+    "README.md",
+    ".claude/skills/factory/SKILL.md"
+  ],
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js",
+      "default": "./dist/index.js"
+    },
+    "./factory/board.schema.json": "./factory/board.schema.json",
+    "./factory/board.example.json": "./factory/board.example.json",
+    "./skill": "./.claude/skills/factory/SKILL.md",
+    "./package.json": "./package.json"
+  },
   "scripts": {
-    "build": "tsc --noEmit false --outDir dist --rootDir src",
+    "build": "tsc --noEmit false --declaration --outDir dist --rootDir src",
     "typecheck": "tsc --noEmit",
     "test": "npm run build && node --test tests/*.test.mjs",
-    "check": "npm run typecheck && npm test"
+    "test:package": "npm run build && node --test tests/package-smoke.test.mjs",
+    "check": "npm run typecheck && npm test",
+    "prepack": "npm run build"
   },
   "devDependencies": {
     "@types/node": "22.19.0",
