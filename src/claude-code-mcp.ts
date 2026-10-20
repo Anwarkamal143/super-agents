@@ -117,8 +117,8 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         let response: { action: ElicitationAction; content?: JsonObject };
         try { response = await requestHuman(`Approve this factory plan? Run: ${runId}. Plan SHA-256: ${digest}.\n\n${plan}`, parentRequestId); }
         catch (error) {
-          await orchestrator.transition(runId, "cancelled", run.revision);
-          return { approved: false, blocked: true, reason: error instanceof Error ? error.message : "Elicitation failed." };
+          const cancelled = await orchestrator.transition(runId, "cancelled", run.revision);
+          return { approved: false, blocked: true, run: cancelled, reason: error instanceof Error ? error.message : "Elicitation failed." };
         }
         if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
           const cancelled = await orchestrator.transition(runId, "cancelled", run.revision);
