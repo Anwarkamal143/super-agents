@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, mkdtemp as makeTempDir, readFile, rm, symlink, writeFile } from "node:fs/promises";
+import { mkdtemp, mkdir, readFile, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -59,14 +59,14 @@ test("rejects traversal, absolute paths, Windows absolute paths, and missing fil
   await assert.rejects(resolveWithinRoot(root, "missing.txt"), DiscoveryPathError);
 });
 
-test("rejects symlinks that escape the selected root", async (t) => {
+test("rejects symlinks that escape the selected root and diagnoses known unsafe paths", async (t) => {
   const { base, root } = await fixture(t);
   const outside = path.join(base, "outside.txt");
   await writeFile(outside, "secret");
-  await symlink(outside, path.join(root, "escape.txt"));
-  await assert.rejects(resolveWithinRoot(root, "escape.txt"), /Symlink resolves outside/);
+  await symlink(outside, path.join(root, "AGENTS.md"));
+  await assert.rejects(resolveWithinRoot(root, "AGENTS.md"), /Symlink resolves outside/);
   const result = await discoverRepository(root);
-  assert.ok(result.diagnostics.some((item) => item.code === "unsafe-marker-path" || item.code === "unsafe-instruction-path"));
+  assert.ok(result.diagnostics.some((item) => item.code === "unsafe-instruction-path"));
 });
 
 test("reports malformed package manifests rather than guessing commands", async (t) => {
