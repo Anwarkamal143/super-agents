@@ -65,3 +65,12 @@ Capability detection does not authorize an action. Approval policy and verificat
 Consequential actions are allowlisted by stable action type; unknown types are denied. A human decision is bound to the action type and SHA-256 digest of canonical JSON payload, so reordering object keys does not change identity but material payload changes do. Approval is consumed atomically by the ledger on successful authorization and cannot be replayed. Decisions and authorization attempts append audit events containing action type, digest, actor, timestamp, and outcome metadata only—never the raw payload, rationale, or credentials.
 
 The JSON ledger uses atomic file replacement and restrictive file permissions. Like the initial workflow JSON store, it is a single-process store, not a multi-process transactional database; production multi-writer deployments need a transactional store with uniqueness/compare-and-swap semantics. Approval recording must only be called by a trusted human decision boundary. Policy authorization is necessary but does not itself execute the action, and merge/deploy remain human-controlled.
+
+
+## Verification runner
+
+Verification executes only explicitly configured checks whose executable identifiers resolve through a trusted absolute-path allowlist. Before each spawn, an authorization callback must approve the exact executable, arguments, resolved repository-contained working directory, timeout, output limit, and allowed environment key names. Processes use `shell: false`; repository scripts and instruction text are never parsed into commands by the runner.
+
+Each result records command identity, exit status, timestamps, duration, bounded stdout/stderr, SHA-256 digests of the complete observed streams, observed byte counts, and truncation. Passed, failed, skipped, timed-out, cancelled, and blocked checks are distinct; skipped or blocked checks never count as passed. The runner inherits only an explicit environment-key allowlist and never copies environment values into evidence. A complete verification report is passing only when every configured check passed.
+
+The runner does not itself establish human identity or create approvals. Its authorization callback must be wired to the trusted approval policy and a previously recorded approval scoped to that exact check. Configured command arguments remain trusted configuration and should be reviewed as code.
