@@ -15,6 +15,7 @@ import type { WorkflowRun, WorkflowStatus } from "./domain.js";
 import { ApprovalPolicy, JsonFileApprovalStore, digestPayload, type ConsequentialAction } from "./approval.js";
 import { JsonFileWorkflowStore, WorkflowOrchestrator, WorkflowConflictError } from "./orchestrator.js";
 import { WORKFLOW_TRANSITIONS } from "./workflow.js";
+import { runVerification, type VerificationCheck } from "./verification.js";
 
 type JsonObject = Record<string, unknown>;
 type RpcMessage = { jsonrpc: "2.0"; id?: string | number; method?: string; params?: JsonObject; result?: unknown; error?: { code: number; message: string } };
@@ -26,6 +27,7 @@ const TOOLS = [
   { name: "factory_plan_request_approval", description: "Ask the human to approve the exact plan in the active host session. Decline, cancel or unsupported elicitation blocks implementation.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, plan: { type: "string", minLength: 1, maxLength: 12000 } }, required: ["runId", "expectedRevision", "plan"], additionalProperties: false } },
   { name: "factory_phase_transition", description: "Advance a workflow only with the expected persisted revision and a legal transition.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, to: { type: "string", enum: ["verifying", "reviewing", "failed", "cancelled"] } }, required: ["runId", "expectedRevision", "to"], additionalProperties: false } },
   { name: "factory_action_request_approval", description: "Request fresh human approval for one exact native Claude Code tool input. Payload must be {toolName, toolInput}; it is bound to a SHA-256 digest and consumed once by the PreToolUse gate.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, actionType: { type: "string", enum: ["file.write", "command.execute"] }, toolName: { type: "string", enum: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"] }, toolInput: { type: "object" }, reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["runId", "actionType", "toolName", "toolInput", "reason"], additionalProperties: false } },
+  { name: "factory_verification_run", description: "Run the operator-configured, bounded verification profile. Each exact check requires fresh human approval; results are persisted as runner-observed evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 } }, required: ["runId", "expectedRevision"], additionalProperties: false } },
   { name: "factory_evidence_submit", description: "Persist bounded evidence from the active model session. Model-reported evidence is not trusted runner evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, summary: { type: "string", minLength: 1, maxLength: 4000 }, kind: { type: "string", enum: ["command", "test", "typecheck", "review", "other"] }, outcome: { type: "string", enum: ["passed", "failed", "skipped", "unknown"] } }, required: ["runId", "expectedRevision", "summary", "kind", "outcome"], additionalProperties: false } },
   { name: "factory_delivery_status", description: "Report delivery readiness; never creates PRs, merges, deploys or publishes.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
 ] as const;
@@ -172,6 +174,63 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           rationale: reason, scopeId: runId,
         });
         return { approved: true, approvalId: approval.id, payloadDigest: digest, singleUse: true, actorIdentity: "host does not expose authenticated identity" };
+      }
+      case "factory_verification_run": {
+        const runId = requireString(args, "runId");
+        const expectedRevision = requireInteger(args, "expectedRevision");
+        const record = await orchestrator.getWorkflow(runId);
+        if (!record) throw new Error("Workflow session not found.");
+        if (record.run.revision !== expectedRevision) throw new WorkflowConflictError("Stale revision; reload before running verification.");
+        if (record.run.status !== "running" && record.run.status !== "verifying") {
+          throw new WorkflowConflictError("Verification is only available during an active implementation or verification phase.");
+        }
+
+        const rawProfile = process.env["FACTORY_VERIFICATION_PROFILE"];
+        if (!rawProfile) throw new Error("Verification is not configured. Set FACTORY_VERIFICATION_PROFILE to an operator-reviewed JSON profile.");
+        let profile: { checks: VerificationCheck[]; allowedExecutables: Record<string, string> };
+        try {
+          const parsed: unknown = JSON.parse(rawProfile);
+          const value = requireObject(parsed, "FACTORY_VERIFICATION_PROFILE");
+          if (!Array.isArray(value["checks"]) || value["checks"].length === 0) throw new TypeError("checks must be a non-empty array.");
+          const allowedExecutables = requireObject(value["allowedExecutables"], "allowedExecutables") as Record<string, string>;
+          if (Object.values(allowedExecutables).some((executable) => typeof executable !== "string" || !path.isAbsolute(executable))) {
+            throw new TypeError("allowedExecutables must map stable IDs to absolute executable paths.");
+          }
+          profile = { checks: value["checks"] as VerificationCheck[], allowedExecutables };
+        } catch (error) {
+          throw new TypeError(`Invalid operator verification profile: ${error instanceof Error ? error.message : "invalid JSON"}`);
+        }
+
+        const report = await runVerification({
+          repositoryRoot: cwd,
+          checks: profile.checks,
+          allowedExecutables: profile.allowedExecutables,
+          authorize: async (_actionType, payload) => {
+            const approval = await requestHuman(
+              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
+              parentRequestId,
+            );
+            return approval.action === "accept" && approval.content?.["decision"] === "approve";
+          },
+        });
+
+        const persisted = [];
+        for (const check of report.checks) {
+          const stepId = `runner-verification-${runId}-${check.checkId}`;
+          const started = await orchestrator.beginStep(runId, stepId);
+          if (started.status !== "started") throw new WorkflowConflictError(`Could not persist verification step ${check.checkId}.`);
+          const outcome = check.status === "passed" ? "passed"
+            : check.status === "failed" || check.status === "timed_out" ? "failed"
+              : check.status === "skipped" ? "skipped" : "unknown";
+          const kind = check.kind === "test" || check.kind === "typecheck" ? check.kind : "command";
+          const summary = `Runner observed ${check.status} for ${check.checkId}; exitCode=${check.exitCode ?? "none"}; stdoutSha256=${check.stdoutDigest}; stderrSha256=${check.stderrDigest}; outputTruncated=${check.outputTruncated}.`;
+          await orchestrator.finishStep(runId, stepId, outcome === "passed" ? "succeeded" : "failed", summary, {
+            id: randomUUID(), runId, source: "runner_observed", kind, outcome, summary,
+            observedAt: check.finishedAt, artifactIds: [],
+          });
+          persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, stdout: check.stdout, stderr: check.stderr, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, reason: check.reason });
+        }
+        return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
       }
       case "factory_evidence_submit": {
         const runId = requireString(args, "runId");
