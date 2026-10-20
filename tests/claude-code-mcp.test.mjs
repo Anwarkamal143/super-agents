@@ -293,16 +293,18 @@ test("MCP bridge treats explicit elicitation cancellation as a terminal block", 
   assert.equal(plan.approved, false);
   assert.equal(plan.blocked, true);
   assert.equal(plan.run.status, "cancelled");
-  await assert.rejects(
-    client.tool("factory_action_request_approval", {
+  const action = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
       runId: created.run.id,
       actionType: "file.write",
       toolName: "Write",
       toolInput: { file_path: "/tmp/never-write.txt", content: "blocked" },
       reason: "This must not reach an approval prompt after cancellation.",
-    }),
-    /active workflow phase/,
-  );
+    },
+  });
+  assert.equal(action.result.isError, true);
+  assert.match(action.result.content[0].text, /active workflow phase/);
 });
 
 test("MCP bridge rejects stale phase revisions without mutating the workflow", async (t) => {
