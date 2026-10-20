@@ -59,6 +59,10 @@ for (const entry of adapters) {
     assert.equal(capabilities.available, true);
     assert.ok(capabilities.supported.includes("prompt-invocation"));
     assert.ok(Array.isArray(capabilities.unsupported));
+    if (adapter.id === "scripted-fixture") {
+      assert.ok(capabilities.unsupported.includes("cancellation"));
+      assert.ok(capabilities.unsupported.includes("timeouts"));
+    }
   });
 
   test(`portable harness contract: ${entry.name} validates input and returns honest success`, async () => {
