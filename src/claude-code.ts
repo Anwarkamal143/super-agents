@@ -50,7 +50,7 @@ export class ClaudeCodeAdapter implements HarnessAdapter {
       const helpText = `${help.stdout}\n${help.stderr}`;
       const supported: HarnessCapability[] = ["cancellation", "timeouts", "bounded-output"];
       const unsupported: HarnessCapability[] = ["structured-output", "parallel-agents"];
-      const printSupported = /(?:^|\s)-p(?:,|\s|$)|--print(?:\s|,|$)/m.test(helpText);
+      const printSupported = /--print\b|(?:^|\s)-p(?:\s|,|]|$)/m.test(helpText);
       if (printSupported) supported.push("prompt-invocation");
       else unsupported.push("prompt-invocation");
 
