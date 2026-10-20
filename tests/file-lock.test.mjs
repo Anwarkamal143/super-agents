@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm, stat } from "node:fs/promises";
+import { mkdtemp, readFile, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { withFileLock } from "../dist/file-lock.js";
@@ -26,5 +26,29 @@ test("file lock has owner-only permissions on POSIX and is released after use", 
     });
 
     await assert.rejects(stat(lockPath), { code: "ENOENT" });
+  });
+});
+
+test("malformed lock records fail closed and remain untouched", async () => {
+  await withDirectory(async (directory) => {
+    const lockPath = path.join(directory, "workflow.lock");
+    const malformedRecord = "{incomplete";
+    let operationStarted = false;
+
+    await writeFile(lockPath, malformedRecord, { encoding: "utf8", mode: 0o600 });
+
+    await assert.rejects(
+      withFileLock(
+        lockPath,
+        async () => {
+          operationStarted = true;
+        },
+        { timeoutMs: 30, retryMs: 1 },
+      ),
+      /Timed out acquiring file lock/,
+    );
+
+    assert.equal(operationStarted, false);
+    assert.equal(await readFile(lockPath, "utf8"), malformedRecord);
   });
 });
