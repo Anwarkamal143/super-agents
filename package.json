@@ -1,0 +1,19 @@
+{
+  "name": "super-agents",
+  "version": "0.1.0",
+  "private": true,
+  "description": "An agent-agnostic, approval-gated software factory",
+  "type": "module",
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "build": "tsc --noEmit false --outDir dist --rootDir src",
+    "typecheck": "tsc --noEmit",
+    "test": "npm run build && node --test tests/*.test.mjs",
+    "check": "npm run typecheck && npm test"
+  },
+  "devDependencies": {
+    "typescript": "5.8.3"
+  }
+}
