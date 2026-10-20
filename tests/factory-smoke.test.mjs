@@ -102,6 +102,10 @@ test("factory smoke: timeout is reported as timed_out, not success", async () =>
       child.stdout.end("Usage: claude -p [options]\n");
       child.emit("close", 0);
     });
+    if (args[0] !== "--version" && args[0] !== "--help") {
+      const keepAlive = setTimeout(() => {}, 1_000);
+      child.once("close", () => clearTimeout(keepAlive));
+    }
     // Prompt invocation deliberately never closes; the adapter timeout kills it.
   });
   const adapter = new ClaudeCodeAdapter({ spawnProcess });
