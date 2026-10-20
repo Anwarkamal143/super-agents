@@ -197,8 +197,8 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       }
       if (!message.method) return;
       if (message.method === "initialize") {
-        const capabilities = message.params?.capabilities as JsonObject | undefined;
-        const requestedProtocol = message.params?.protocolVersion;
+        const capabilities = message.params?.["capabilities"] as JsonObject | undefined;
+        const requestedProtocol = message.params?.["protocolVersion"];
         if (requestedProtocol !== "2025-11-25") {
           send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "This minimal bridge supports only MCP protocol 2025-11-25 elicitation. Upgrade the bridge before using a host that negotiates another protocol." } });
           return;
