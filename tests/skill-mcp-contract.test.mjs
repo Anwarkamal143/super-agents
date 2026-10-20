@@ -25,7 +25,7 @@ test("/factory skill wires its workflow to the opt-in MCP tools", async () => {
   assert.match(skill, /host elicitation/i);
   assert.match(skill, /un-enforced prompt-only mode/i);
   assert.match(skill, /NOT RUN/);
-  assert.match(skill, /must not launch a second Claude CLI process/i);
+  assert.match(skill, /do not launch a second Claude CLI process/i);
 });
 
 test("usage documentation distinguishes MCP wiring from the library API and real-host proof", async () => {
