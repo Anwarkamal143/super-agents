@@ -79,11 +79,16 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
     planId: options.plan.id,
     planDigest: createHash("sha256").update(options.plan.summary, "utf8").digest("hex"),
   };
-  const planDecision = await options.requestApproval({
-    actionType: "file.write",
-    payload: planPayload,
-    reason: "Approve implementation of this exact, reviewed plan.",
-  });
+  let planDecision: HumanApprovalResponse | undefined;
+  try {
+    planDecision = await options.requestApproval({
+      actionType: "file.write",
+      payload: planPayload,
+      reason: "Approve implementation of this exact, reviewed plan.",
+    });
+  } catch {
+    return blocked("The human approval interaction failed; implementation remains blocked.");
+  }
   if (!planDecision || planDecision.outcome !== "approved" || !planDecision.decidedBy.trim()) {
     if (planDecision?.outcome === "denied" && planDecision.decidedBy.trim()) {
       await options.approvals.recordDecision({
@@ -102,15 +107,28 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
   );
   if (!planAuthorization.allowed) return blocked(`Plan approval could not be consumed: ${planAuthorization.reason}.`);
 
+  const stepStart = await options.orchestrator.beginStep(run.id, "implement-approved-plan");
+  if (stepStart.status !== "started") {
+    return blocked(`Implementation step cannot start safely (status: ${stepStart.status}); reconcile prior work before retrying.`);
+  }
+
   let reviewInput: PinnedReviewInput;
   try {
     reviewInput = await options.implementApprovedPlan();
+    await options.orchestrator.finishStep(
+      run.id, "implement-approved-plan", "succeeded", "Implementation callback returned a pinned review input.",
+    );
   } catch (error) {
-    return failed(error instanceof Error ? error.message : "Implementation failed.");
+    // A thrown implementation callback may have changed files before failing.
+    // Preserve an interrupted marker; never assume retry is safe.
+    await options.orchestrator.recoverInterruptedSteps(run.id, "factory-orchestrator");
+    return failed(error instanceof Error ? error.message : "Implementation outcome is ambiguous; reconciliation is required.");
   }
 
   await transition("verifying");
-  const verification = await runVerification({
+  let verification: VerificationReport;
+  try {
+    verification = await runVerification({
     ...options.verification,
     authorize: async (actionType, payload) => {
       const decision = await options.requestApproval({
@@ -136,7 +154,16 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
       );
       return authorization.allowed;
     },
-  });
+    });
+  } catch (error) {
+    return failed(error instanceof Error ? error.message : "Verification could not complete.", {
+      repositoryRoot: options.verification.repositoryRoot,
+      startedAt: new Date().toISOString(),
+      finishedAt: new Date().toISOString(),
+      status: "incomplete",
+      checks: [],
+    });
+  }
   if (verification.status !== "passed") {
     return failed(`Verification did not pass (status: ${verification.status}); review and delivery are blocked.`, verification);
   }
