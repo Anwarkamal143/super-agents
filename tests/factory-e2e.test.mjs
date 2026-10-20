@@ -89,7 +89,7 @@ test("composed workflow persists approval, verification, both reviews, and stops
   assert.deepEqual(persisted.events.map((event) => event.to), [
     "created", "ready", "running", "awaiting_approval", "running", "verifying", "reviewing", "completed",
   ]);
-  assert.equal(persisted.steps && Object.keys(persisted.steps).length, 0);
+  assert.equal(persisted.steps["implement-approved-plan"].status, "succeeded");
   const audit = await state.approvals.listAuditEvents();
   assert.equal(audit.filter((event) => event.kind === "authorization_granted").length, 2);
   assert.equal(audit.some((event) => JSON.stringify(event).includes("Implement the approved example export.")), false);
@@ -138,4 +138,50 @@ test("failed verification blocks review and delivery", async (t) => {
   assert.match(result.reason, /Verification did not pass/);
   const persisted = await state.orchestrator.getWorkflow(state.run.id);
   assert.equal(persisted.run.status, "failed");
+});
+
+
+test("review findings block delivery even after verification passes", async (t) => {
+  const state = await setup(t);
+  const result = await runFactoryWorkflow({
+    ...state,
+    plan: { id: "plan-review-blocked", summary: "Exercise review gating." },
+    requestApproval: async () => ({ outcome: "approved", decidedBy: "test-human" }),
+    implementApprovedPlan: async () => reviewInput(),
+    verification: verification(state.root),
+    reviewEngine: {
+      reviewStandards: async () => ({
+        axis: "standards", status: "changes_requested", summary: "An issue remains.",
+        findings: [{
+          id: "finding-1", severity: "medium", title: "Missing coverage",
+          detail: "Add a test before delivery.", status: "open",
+        }],
+      }),
+      reviewSpec: async () => passed("spec"),
+    },
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.run.status, "failed");
+  assert.equal(result.verification.status, "passed");
+  assert.equal(result.review.status, "changes_requested");
+  assert.match(result.reason, /review did not pass/);
+});
+
+test("ambiguous implementation failure is marked interrupted and cannot be blindly retried", async (t) => {
+  const state = await setup(t);
+  const result = await runFactoryWorkflow({
+    ...state,
+    plan: { id: "plan-ambiguous", summary: "Exercise interrupted side-effect handling." },
+    requestApproval: async () => ({ outcome: "approved", decidedBy: "test-human" }),
+    implementApprovedPlan: async () => { throw new Error("worker disconnected after a possible file write"); },
+    verification: verification(state.root),
+    reviewEngine: engine(),
+  });
+
+  assert.equal(result.status, "failed");
+  assert.equal(result.run.status, "failed");
+  const persisted = await state.orchestrator.getWorkflow(state.run.id);
+  assert.equal(persisted.steps["implement-approved-plan"].status, "interrupted");
+  assert.equal((await state.orchestrator.beginStep(state.run.id, "implement-approved-plan")).status, "reconciliation_required");
 });
