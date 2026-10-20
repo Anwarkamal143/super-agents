@@ -56,7 +56,7 @@ async function main(): Promise<void> {
       deny(`No active one-time human approval matches this exact ${toolName} input (SHA-256 ${digest}). Request approval through the factory MCP bridge.`);
       return;
     }
-    const runId = candidate.rationale?.match(/^factory-run-id:([^\\r\\n]+)/)?.[1];
+    const runId = candidate.rationale?.match(/^factory-run-id:([^\r\n]+)/)?.[1];
     if (!runId) {
       await policy.revoke(candidate.id, "claude-code-pretool-hook");
       deny("Approval is not bound to a workflow run; action denied.");
