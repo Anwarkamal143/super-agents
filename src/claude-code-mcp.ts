@@ -208,11 +208,24 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           allowedExecutables: profile.allowedExecutables,
           signal,
           authorize: async (_actionType, payload) => {
-            const approval = await requestHuman(
+            const response = await requestHuman(
               `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
               parentRequestId,
             );
-            return approval.action === "accept" && approval.content?.["decision"] === "approve";
+            const accepted = response.action === "accept" && response.content?.["decision"] === "approve";
+            const approval = await approvals.recordDecision({
+              actionType: "command.execute",
+              payload,
+              outcome: accepted ? "approved" : "denied",
+              decidedBy: "claude-code-elicitation-host",
+              rationale: `Verification check ${payload.checkId}`,
+              scopeId: runId,
+            });
+            if (!accepted) return false;
+            const authorization = await approvals.authorizeAndConsume(
+              "command.execute", payload, approval.id, "factory-verification-runner",
+            );
+            return authorization.allowed;
           },
         });
 
