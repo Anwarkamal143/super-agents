@@ -97,7 +97,8 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
   const results: VerificationEvidenceRecord[] = [];
   const spawnProcess = config.spawnProcess ?? spawn;
 
-  for (const check of config.checks) {
+  for (let checkIndex = 0; checkIndex < config.checks.length; checkIndex += 1) {
+    const check = config.checks[checkIndex];
     const executable = config.allowedExecutables[check.executable];
     const timeoutMs = check.timeoutMs ?? config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxOutputBytes = check.maxOutputBytes ?? config.defaultMaxOutputBytes ?? DEFAULT_OUTPUT_BYTES;
@@ -118,16 +119,34 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
       continue;
     }
 
+    if (config.signal?.aborted) {
+      results.push(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled before authorization."));
+      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      break;
+    }
+
     let authorized = false;
     try {
       authorized = await config.authorize("command.execute", authorizationPayload);
     } catch (error) {
-      results.push(emptyEvidence(check, "blocked", cwd, now, id, safeError(error, "Authorization failed.")));
-      continue;
+      results.push(emptyEvidence(check, config.signal?.aborted ? "cancelled" : "blocked", cwd, now, id,
+        config.signal?.aborted ? "Verification run was cancelled during authorization." : safeError(error, "Authorization failed.")));
+      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      break;
     }
+
+    // The parent request may be cancelled while human elicitation is pending.
+    // Re-check immediately after the callback and before any process can spawn.
+    if (config.signal?.aborted) {
+      results.push(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled during authorization."));
+      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      break;
+    }
+
     if (!authorized) {
       results.push(emptyEvidence(check, "blocked", cwd, now, id, "Execution was not authorized."));
-      continue;
+      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      break;
     }
 
     const env: NodeJS.ProcessEnv = {};
@@ -136,7 +155,7 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
       if (value !== undefined) env[key] = value;
     }
 
-    results.push(await executeCheck({
+    const result = await executeCheck({
       check,
       executable,
       cwd,
@@ -147,7 +166,12 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
       now,
       id,
       signal: config.signal,
-    }));
+    });
+    results.push(result);
+    if (result.status === "failed" || result.status === "timed_out" || result.status === "cancelled") {
+      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      break;
+    }
   }
 
   const finishedAt = now();
@@ -344,7 +368,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
 
 function emptyEvidence(
   check: VerificationCheck,
-  status: "skipped" | "blocked",
+  status: "skipped" | "blocked" | "cancelled",
   cwd: string,
   now: () => string,
   id: () => string,
@@ -372,6 +396,27 @@ function emptyEvidence(
     observedStderrBytes: 0,
     reason,
   };
+}
+
+
+function appendNotRunChecks(
+  checks: readonly VerificationCheck[],
+  startIndex: number,
+  results: VerificationEvidenceRecord[],
+  repositoryRoot: string,
+  now: () => string,
+  id: () => string,
+): void {
+  for (const check of checks.slice(startIndex)) {
+    results.push(emptyEvidence(
+      check,
+      "skipped",
+      repositoryRoot,
+      now,
+      id,
+      "Not run because an earlier check stopped the verification run.",
+    ));
+  }
 }
 
 function safeError(error: unknown, fallback: string): string {
