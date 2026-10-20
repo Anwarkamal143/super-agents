@@ -24,6 +24,8 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
   let stdout = "";
   let stderr = "";
   const waiting = new Map();
+  const elicitationQueue = [];
+  const elicitationWaiters = [];
   let id = 0;
   child.stderr.on("data", (chunk) => { stderr += chunk.toString(); });
   child.stdout.on("data", (chunk) => {
@@ -34,7 +36,12 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
       if (!line.trim()) continue;
       const message = JSON.parse(line);
       if (message.method === "elicitation/create") {
-        if (currentDecision === "none") continue;
+        if (currentDecision === "none") {
+          const waiter = elicitationWaiters.shift();
+          if (waiter) waiter(message);
+          else elicitationQueue.push(message);
+          continue;
+        }
         child.stdin.write(JSON.stringify({
           jsonrpc: "2.0",
           id: message.id,
@@ -52,16 +59,40 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
       }
     }
   });
-  const request = (method, params = {}) => new Promise((resolve, reject) => {
+  const request = (method, params = {}) => {
     const requestId = ++id;
-    waiting.set(String(requestId), resolve);
-    child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }) + "\n");
-    const timer = setTimeout(() => {
-      waiting.delete(String(requestId));
-      reject(new Error(`Timed out waiting for ${method}. stderr=${stderr}`));
-    }, 3000);
-    timer.unref();
-  });
+    let timer;
+    const promise = new Promise((resolve, reject) => {
+      waiting.set(String(requestId), (message) => { clearTimeout(timer); resolve(message); });
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }) + "\n");
+      timer = setTimeout(() => {
+        waiting.delete(String(requestId));
+        reject(new Error(`Timed out waiting for ${method}. stderr=${stderr}`));
+      }, 3000);
+      timer.unref();
+    });
+    promise.requestId = requestId;
+    return promise;
+  };
+  const nextElicitation = () => elicitationQueue.length
+    ? Promise.resolve(elicitationQueue.shift())
+    : new Promise((resolve) => elicitationWaiters.push(resolve));
+  const respondToElicitation = (elicitationId, decision = "accept") => {
+    child.stdin.write(JSON.stringify({
+      jsonrpc: "2.0",
+      id: elicitationId,
+      result: decision === "accept"
+        ? { action: "accept", content: { decision: "approve" } }
+        : { action: decision },
+    }) + "\n");
+  };
+  const notifyCancelled = (requestId) => {
+    child.stdin.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId, reason: "Test cancelled the parent tool call." },
+    }) + "\n");
+  };
   const tool = async (name, args) => {
     const response = await request("tools/call", { name, arguments: args });
     assert.equal(response.error, undefined, JSON.stringify(response.error));
@@ -69,7 +100,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs) 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, tool, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
+  return { child, request, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -531,6 +562,84 @@ test("MCP bridge does not create a native action approval when elicitation times
   assert.equal(response.result?.isError, true);
   assert.match(response.result.content?.[0]?.text ?? "", /timed out/i);
 
+  const hookResult = await runHook(cwd, "Write", toolInput);
+  assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
+});
+
+
+test("MCP bridge persists cancellation when the host cancels a pending plan approval request", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-parent-cancel-plan-"));
+  const client = startClient(cwd, "none", 1000);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "cancelling-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "parent-cancel-plan" });
+  const pendingPlan = client.request("tools/call", {
+    name: "factory_plan_request_approval",
+    arguments: { runId: created.run.id, expectedRevision: 0, plan: "Cancel while waiting for a human decision." },
+  });
+  const elicitation = await client.nextElicitation();
+  client.notifyCancelled(pendingPlan.requestId);
+
+  const response = await pendingPlan;
+  const result = JSON.parse(response.result.content[0].text);
+  assert.equal(result.approved, false);
+  assert.equal(result.blocked, true);
+  assert.equal(result.run.status, "cancelled");
+
+  client.respondToElicitation(elicitation.id, "accept");
+  const persisted = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(persisted.run.status, "cancelled");
+});
+
+test("MCP bridge never grants action approval after parent request cancellation and ignores late elicitation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-parent-cancel-action-"));
+  const client = startClient(cwd, "accept", 1000);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "cancelling-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "parent-cancel-action" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve plan before testing cancellation of an action request.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/parent-cancel.txt", content: "must remain unapproved" };
+  client.setElicitationDecision("none");
+  const pendingAction = client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "Cancel this action approval request before the human responds.",
+    },
+  });
+  const elicitation = await client.nextElicitation();
+  client.notifyCancelled(pendingAction.requestId);
+
+  const response = await pendingAction;
+  assert.equal(response.result?.isError, true);
+  assert.match(response.result.content?.[0]?.text ?? "", /cancelled/i);
+
+  client.respondToElicitation(elicitation.id, "accept");
   const hookResult = await runHook(cwd, "Write", toolInput);
   assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
 });
