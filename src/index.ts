@@ -6,3 +6,5 @@ export * from "./domain.js";
 export * from "./workflow.js";
 export * from "./discovery.js";
 export * from "./orchestrator.js";
+export * from "./harness.js";
+export * from "./claude-code.js";
