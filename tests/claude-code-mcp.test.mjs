@@ -689,3 +689,53 @@ test("MCP bridge fails closed when an accepted action cannot be persisted to the
   assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
   assert.match(hookResult.hookSpecificOutput.permissionDecisionReason, /approval|state|persist|ledger|JSON/i);
 });
+
+
+test("PreToolUse hook denies a matching approval when persisted workflow state is corrupt or missing", async (t) => {
+  for (const failureMode of ["corrupt", "missing"]) {
+    const cwd = await mkdtemp(path.join(os.tmpdir(), `factory-hook-workflow-${failureMode}-`));
+    const client = startClient(cwd);
+    t.after(async () => {
+      client.child.kill("SIGTERM");
+      await rm(cwd, { recursive: true, force: true });
+    });
+
+    await client.request("initialize", {
+      protocolVersion: "2025-11-25",
+      capabilities: { elicitation: { form: {} } },
+      clientInfo: { name: "workflow-state-failure-host", version: "1.0.0" },
+    });
+    const created = await client.tool("factory_session_create", { requestId: `workflow-state-${failureMode}` });
+    const plan = await client.tool("factory_plan_request_approval", {
+      runId: created.run.id,
+      expectedRevision: 0,
+      plan: "Approve a fixture action before corrupting workflow state.",
+    });
+    assert.equal(plan.approved, true);
+
+    const toolInput = { file_path: `/tmp/workflow-state-${failureMode}.txt`, content: "must remain blocked" };
+    const approval = await client.tool("factory_action_request_approval", {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "Ensure workflow state is validated independently of the matching approval.",
+    });
+    assert.equal(approval.approved, true);
+
+    const stateDirectory = path.join(cwd, ".factory-state");
+    const workflowPath = path.join(stateDirectory, "workflows.json");
+    if (failureMode === "corrupt") {
+      await writeFile(workflowPath, "{invalid-json", "utf8");
+    } else {
+      await rm(workflowPath);
+    }
+
+    const hookResult = await runHook(cwd, "Write", toolInput);
+    assert.equal(
+      hookResult.hookSpecificOutput?.permissionDecision,
+      "deny",
+      `${failureMode} workflow state must deny a matching approval: ${JSON.stringify(hookResult)}`,
+    );
+  }
+});
