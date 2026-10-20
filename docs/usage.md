@@ -94,7 +94,7 @@ Record decisions only from a trusted human approval interface. Bind approval to 
 
 ### Verification
 
-Configure executable identifiers to resolve to trusted absolute paths, and wire the authorization callback to the approval policy using the exact `VerificationAuthorizationPayload`. Keep command arguments under code review. Never use an unconditional production authorization callback.
+Configure executable identifiers to resolve to trusted absolute paths, and wire the authorization callback to the approval policy using the exact `VerificationAuthorizationPayload`. Keep command arguments under code review. Never translate repository-provided prose into a command or use an unconditional production authorization callback.
 
 ### Recovery
 
