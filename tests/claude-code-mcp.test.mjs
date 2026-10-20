@@ -11,7 +11,7 @@ const serverEntry = path.join(root, "dist", "claude-code-mcp.js");
 const hookEntry = path.join(root, "dist", "claude-code-pretool-hook.js");
 
 function startClient(cwd, elicitationDecision = "accept") {
-  const child = spawn(process.execPath, [serverEntry], { cwd, stdio: ["pipe", "pipe", "pipe"] });
+  const child = spawn(process.execPath, [serverEntry], { cwd, env: { ...process.env, FACTORY_STATE_DIR: ".factory-state" }, stdio: ["pipe", "pipe", "pipe"] });
   let stdout = "";
   let stderr = "";
   const waiting = new Map();
