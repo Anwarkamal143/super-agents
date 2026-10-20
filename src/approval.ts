@@ -115,7 +115,7 @@ export interface ApprovalPolicyOptions {
 /**
  * Records scoped human decisions and consumes each approval at most once.
  * A decision is bound to an action type and a canonical SHA-256 payload digest.
- * The policy is default-deny; its JSON store supports a single writer only.
+ * The policy is default-deny; file-backed operations use a same-host cooperative lock, not a distributed transaction.
  */
 export class ApprovalPolicy {
   private tail: Promise<void> = Promise.resolve();
