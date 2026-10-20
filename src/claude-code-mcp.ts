@@ -34,9 +34,18 @@ export interface FactoryMcpServerOptions {
   readonly stateDirectory?: string;
   readonly input?: NodeJS.ReadableStream;
   readonly output?: NodeJS.WritableStream;
+  /** Bounded override intended for tests and controlled local deployments. */
+  readonly elicitationTimeoutMs?: number;
 }
 
+const DEFAULT_ELICITATION_TIMEOUT_MS = 45_000;
+const MAX_ELICITATION_TIMEOUT_MS = 120_000;
+
 export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {}): Promise<void> {
+  const configuredTimeout = options.elicitationTimeoutMs ?? Number(process.env["FACTORY_ELICITATION_TIMEOUT_MS"] ?? DEFAULT_ELICITATION_TIMEOUT_MS);
+  const elicitationTimeoutMs = Number.isSafeInteger(configuredTimeout) && configuredTimeout >= 1 && configuredTimeout <= MAX_ELICITATION_TIMEOUT_MS
+    ? configuredTimeout
+    : DEFAULT_ELICITATION_TIMEOUT_MS;
   const cwd = process.cwd();
   const stateDirectory = path.resolve(cwd, options.stateDirectory ?? process.env["FACTORY_STATE_DIR"] ?? ".factory-state");
   await mkdir(stateDirectory, { recursive: true, mode: 0o700 });
@@ -53,7 +62,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const rpcRequest = (method: string, params: JsonObject, parentRequestId?: string | number): Promise<RpcMessage> => new Promise((resolve, reject) => {
     if (!clientElicitation) { reject(new Error("Host does not advertise MCP elicitation; approval is unavailable.")); return; }
     const id = `factory-bridge-${++nextId}`;
-    const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, 45_000);
+    const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, elicitationTimeoutMs);
     timer.unref();
     pending.set(id, { resolve: (message) => { clearTimeout(timer); resolve(message); }, reject: (error) => { clearTimeout(timer); reject(error); }, ...(parentRequestId !== undefined ? { parentRequestId } : {}) });
     send({ jsonrpc: "2.0", id, method, params });
