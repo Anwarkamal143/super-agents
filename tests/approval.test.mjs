@@ -178,3 +178,25 @@ test("persistence failure never returns an approval or authorization grant", asy
   }), /disk unavailable/);
   await assert.rejects(policy.authorizeAndConsume("file.write", { path: "README.md" }, "fake-id", "runner"), /disk unavailable/);
 });
+
+test("separate approval policy instances cannot consume the same approval twice", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "super-agents-approval-race-"));
+  try {
+    const file = path.join(directory, "approvals.json");
+    const first = new ApprovalPolicy(new JsonFileApprovalStore(file));
+    const second = new ApprovalPolicy(new JsonFileApprovalStore(file));
+    const approval = await first.recordDecision({
+      actionType: "git.merge", payload: { pullRequest: 99 }, outcome: "approved", decidedBy: "reviewer",
+    });
+    const results = await Promise.all([
+      first.authorizeAndConsume("git.merge", { pullRequest: 99 }, approval.id, "runner-a"),
+      second.authorizeAndConsume("git.merge", { pullRequest: 99 }, approval.id, "runner-b"),
+    ]);
+    assert.equal(results.filter((result) => result.allowed).length, 1);
+    assert.equal(results.filter((result) => !result.allowed && result.reason === "replay").length, 1);
+    const events = await second.listAuditEvents();
+    assert.equal(events.filter((event) => event.kind === "authorization_granted").length, 1);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
