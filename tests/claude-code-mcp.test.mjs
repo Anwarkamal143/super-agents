@@ -270,3 +270,68 @@ test("MCP bridge recovers persisted workflow state after server restart", async 
   assert.equal(session.run.revision, approved.run.revision);
   assert.ok(session.events.length >= 4);
 });
+
+
+test("MCP bridge treats explicit elicitation cancellation as a terminal block", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-cancel-"));
+  const client = startClient(cwd, "cancel");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "cancel-plan" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Cancellation must prevent implementation.",
+  });
+  assert.equal(plan.approved, false);
+  assert.equal(plan.blocked, true);
+  assert.equal(plan.run.status, "cancelled");
+  const action = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput: { file_path: "/tmp/never-write.txt", content: "blocked" },
+      reason: "This must not reach an approval prompt after cancellation.",
+    },
+  });
+  assert.equal(action.result.isError, true);
+  assert.match(action.result.content[0].text, /active workflow phase/);
+});
+
+test("MCP bridge rejects stale phase revisions without mutating the workflow", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stale-revision-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stale-phase" });
+  const approved = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve this plan to advance the revision.",
+  });
+  assert.equal(approved.approved, true);
+  const stale = await client.request("tools/call", {
+    name: "factory_phase_transition",
+    arguments: { runId: created.run.id, expectedRevision: 0, to: "verifying" },
+  });
+  assert.ok(stale.error || stale.result?.isError === true, JSON.stringify(stale));
+  const current = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(current.run.revision, approved.run.revision);
+  assert.equal(current.run.status, "running");
+});
