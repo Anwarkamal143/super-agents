@@ -46,6 +46,7 @@ The skill is an instruction contract, not a security sandbox. JSON stores and co
 ## Documentation
 
 - [Usage and /factory installation](docs/usage.md)
+- [Adding a harness adapter](docs/harness-adapters.md)
 - [Example target repository and end-to-end walkthrough](docs/example-walkthrough.md)
 - [Architecture contract](docs/architecture.md)
 - [Threat model and residual risks](docs/threat-model.md)
