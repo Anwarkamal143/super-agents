@@ -17,7 +17,9 @@ npm run check
 
 ## Current host-bridge status
 
-The `/factory` skill is still prompt-guided and does not automatically invoke `runFactoryWorkflow`. The owner selected an incremental MCP bridge that preserves the active Claude Code session as the orchestrator. Read the [host-bridge architecture decision](claude-code-host-bridge.md). Implementation and the real interactive approval smoke test are tracked in [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38); do not treat this architecture note as evidence that the bridge already works.
+The `/factory` skill now instructs the active Claude Code session to use the opt-in MCP bridge tools when they are actually available. It does not automatically invoke the library function `runFactoryWorkflow`, and installing the skill alone does not enable machine-enforced approval. Configure the MCP server and its matching `PreToolUse` gate using the [bridge setup guide](claude-code-mcp-bridge.md); never overwrite existing host settings blindly.
+
+The bridge is still limited to its documented MCP protocol and local state model. The real interactive Claude Code approval smoke test remains **NOT RUN** until observed and recorded using the [smoke-test report template](claude-code-smoke-report-template.md). Follow [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38) and [issue #35](https://github.com/Anwarkamal143/super-agents/issues/35) for remaining host validation and end-to-end acceptance. Unit tests and skill text do not prove actual host compatibility.
 
 ## Install the /factory skill in a target repository
 
