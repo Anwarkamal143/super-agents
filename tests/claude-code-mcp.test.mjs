@@ -172,3 +172,101 @@ test("MCP bridge fails closed when the human declines plan approval", async (t) 
   assert.equal(plan.blocked, true);
   assert.equal(plan.run.status, "cancelled");
 });
+
+
+test("MCP bridge rejects unsupported protocol negotiation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-protocol-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  const response = await client.request("initialize", {
+    protocolVersion: "2025-06-18",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  assert.equal(response.error.code, -32602);
+  assert.match(response.error.message, /supports only MCP protocol 2025-11-25/);
+});
+
+test("MCP bridge fails closed when elicitation is unavailable or malformed", async (t) => {
+  const unavailableCwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-no-elicitation-"));
+  const unavailable = startClient(unavailableCwd);
+  t.after(async () => {
+    unavailable.child.kill("SIGTERM");
+    await rm(unavailableCwd, { recursive: true, force: true });
+  });
+  const initialized = await unavailable.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  assert.equal(initialized.result.serverInfo.name, "super-agents-factory-bridge");
+  const created = await unavailable.tool("factory_session_create", { requestId: "no-elicitation" });
+  const blocked = await unavailable.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Must not proceed without elicitation.",
+  });
+  assert.equal(blocked.approved, false);
+  assert.equal(blocked.blocked, true);
+  assert.equal(blocked.run.status, "cancelled");
+
+  const malformedCwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-malformed-"));
+  const malformed = startClient(malformedCwd, "malformed");
+  t.after(async () => {
+    malformed.child.kill("SIGTERM");
+    await rm(malformedCwd, { recursive: true, force: true });
+  });
+  await malformed.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const malformedRun = await malformed.tool("factory_session_create", { requestId: "malformed-elicitation" });
+  const malformedApproval = await malformed.tool("factory_plan_request_approval", {
+    runId: malformedRun.run.id,
+    expectedRevision: 0,
+    plan: "Malformed approval must not proceed.",
+  });
+  assert.equal(malformedApproval.approved, false);
+  assert.equal(malformedApproval.blocked, true);
+  assert.equal(malformedApproval.run.status, "cancelled");
+});
+
+test("MCP bridge recovers persisted workflow state after server restart", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-recovery-"));
+  let client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "recover-me" });
+  const approved = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Persist and recover this approved workflow.",
+  });
+  assert.equal(approved.approved, true);
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.kill("SIGTERM");
+  await closed;
+
+  client = startClient(cwd);
+  const recovered = await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  assert.equal(recovered.result.serverInfo.name, "super-agents-factory-bridge");
+  const session = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(session.run.status, "running");
+  assert.equal(session.run.revision, approved.run.revision);
+  assert.ok(session.events.length >= 4);
+});
