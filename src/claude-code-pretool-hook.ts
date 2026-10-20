@@ -6,6 +6,7 @@
  */
 import path from "node:path";
 import { ApprovalPolicy, JsonFileApprovalStore, digestPayload } from "./approval.js";
+import { JsonFileWorkflowStore, WorkflowOrchestrator } from "./orchestrator.js";
 
 interface HookInput {
   readonly tool_name?: unknown;
@@ -53,6 +54,19 @@ async function main(): Promise<void> {
     );
     if (!candidate) {
       deny(`No active one-time human approval matches this exact ${toolName} input (SHA-256 ${digest}). Request approval through the factory MCP bridge.`);
+      return;
+    }
+    const runId = candidate.rationale?.match(/^factory-run-id:([^\\r\\n]+)/)?.[1];
+    if (!runId) {
+      await policy.revoke(candidate.id, "claude-code-pretool-hook");
+      deny("Approval is not bound to a workflow run; action denied.");
+      return;
+    }
+    const orchestrator = new WorkflowOrchestrator(new JsonFileWorkflowStore(path.join(stateDirectory, "workflows.json")));
+    const workflow = await orchestrator.getWorkflow(runId);
+    if (!workflow || !["running", "verifying", "reviewing"].includes(workflow.run.status)) {
+      await policy.revoke(candidate.id, "claude-code-pretool-hook");
+      deny("The workflow run is no longer active; stale approval revoked and action denied.");
       return;
     }
     const authorization = await policy.authorizeAndConsume(actionType, payload, candidate.id, "claude-code-pretool-hook");
