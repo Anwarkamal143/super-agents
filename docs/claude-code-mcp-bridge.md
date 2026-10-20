@@ -72,6 +72,8 @@ The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and 
 
 ## Interactive smoke test required before production use
 
+Use the [interactive smoke-test report template](./claude-code-smoke-report-template.md) to capture version details, actual UI observations, evidence, and blocked/not-run steps. The template is intentionally blank until someone runs the test in a real interactive Claude Code session.
+
 In a disposable target repository and an interactive Claude Code session:
 
 1. Confirm Claude Code's version and that the MCP server connects without protocol errors.
