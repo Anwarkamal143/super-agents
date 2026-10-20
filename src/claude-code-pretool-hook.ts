@@ -42,7 +42,7 @@ async function main(): Promise<void> {
 
   const actionType = FILE_TOOLS.has(toolName) ? "file.write" : "command.execute";
   const payload = { toolName, toolInput: input.tool_input };
-  const stateDirectory = path.resolve(process.cwd(), process.env.FACTORY_STATE_DIR ?? ".factory-state");
+  const stateDirectory = path.resolve(process.cwd(), process.env["FACTORY_STATE_DIR"] ?? ".factory-state");
   const policy = new ApprovalPolicy(new JsonFileApprovalStore(path.join(stateDirectory, "approvals.json")));
   try {
     const digest = digestPayload(payload);
