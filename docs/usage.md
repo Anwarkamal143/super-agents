@@ -1,24 +1,54 @@
-# Using the factory library
+# Using the factory
 
 ## Requirements and verification
 
-- Node.js 22 or newer
-- npm and the committed lockfile
+- Node.js 22 or newer for the TypeScript library.
+- Claude Code for the native `/factory` skill template.
+- npm and the committed lockfile for this repository's checks.
 
 From a clean checkout:
 
 ```sh
 npm ci
-npm run typecheck
-npm test
 npm run check
 ```
 
-`npm test` builds into `dist/` and runs the Node.js test suite. `npm run check` runs typechecking and the full test suite. The test fixtures use temporary repositories and deterministic fake process/harness behavior; they do not require an installed Claude Code CLI.
+`npm test` builds into `dist/` and runs the Node.js test suite. The deterministic tests do not require a Claude Code installation.
 
-## What is available today
+## Install the /factory skill in a target repository
 
-The package exposes building blocks, not a complete interactive CLI or an opinionated production server:
+Copy the skill and board template into the target repository. From the root of this repository, run the following in the target repo, adjusting the source path if you installed or cloned this project elsewhere:
+
+```sh
+mkdir -p .claude/skills/factory factory
+cp /path/to/super-agents/.claude/skills/factory/SKILL.md .claude/skills/factory/SKILL.md
+cp /path/to/super-agents/factory/board.schema.json factory/board.schema.json
+cp /path/to/super-agents/factory/board.example.json factory/board.example.json
+```
+
+Review the copied skill before using it. Keep it under version control so changes are reviewable. If the target repository already has a `factory/board.json`, do not overwrite it; validate and preserve its history first.
+
+Then open Claude Code at the target repository root and invoke:
+
+```text
+/factory Add the feature described in issue #123. First inspect the repository, propose acceptance criteria and a dependency-aware plan, and wait for my approval before editing files.
+```
+
+Claude Code discovers the skill from `.claude/skills/factory/SKILL.md`. The skill guides the current session to act as orchestrator. The first run should inspect the repository and present a plan; it must not treat invoking `/factory` as blanket approval to implement.
+
+## Board contract and single-writer rule
+
+- `factory/board.schema.json` is the JSON Schema interchange contract.
+- `factory/board.example.json` is illustrative only; it explicitly records no work as completed.
+- `validateFactoryBoard(value)` validates runtime essentials, including supported statuses, duplicate IDs, dependency references, cycles, attempt limits, and decision timestamps.
+- Only the orchestrator session may write `factory/board.json`. Subagents may return findings or patches, but must not mutate the board or record approvals.
+- The example board is not a live run. Copy it to `factory/board.json` only after replacing the example request and IDs with the real request and plan.
+
+The JSON Schema and runtime validator are intentionally separate: the schema defines the interchange shape, while the runtime validator adds dependency graph invariants without adding a schema-validation dependency to the core library. For full standards-compliant JSON Schema validation in an integration, use a trusted Draft 2020-12 validator and fail closed on errors.
+
+## What the library provides today
+
+The package exposes building blocks, not a complete interactive CLI or production orchestration service:
 
 | Module | Purpose | Important boundary |
 | --- | --- | --- |
@@ -30,100 +60,63 @@ The package exposes building blocks, not a complete interactive CLI or an opinio
 | `reviewPinnedDiff` / `reviewWithBoundedRepair` | Validate independent Standards/Spec reports and coordinate bounded repair | Reviewer output is untrusted; repair requires authorization and exact fixed-point verification |
 | Manifest functions | Validate declarative skill/component metadata and capability compatibility | Entrypoints are never installed, imported, or executed by manifest validation |
 
-The current JSON stores and file locks are appropriate for local development and cooperating same-host processes. They are not a distributed database. A production multi-host deployment must provide transactional persistence, authenticated actors, policy wiring, secrets handling, quotas, and immutable audit retention as required by its threat model.
-
 ## Recommended integration sequence
 
 ```text
-Request + acceptance criteria
-          |
-          v
-discoverRepository(root) ----> treat all repository instructions as untrusted
-          |
-          v
-Validate plan, manifests, capabilities, and dependencies
-          |
-          v
-Human approves exact consequential action payload
-          |
-          v
-ApprovalPolicy.authorizeAndConsume(action, payload, approvalId, actor)
-          |
-          v
-Run configured verification with exact-payload authorization
-          |
-          v
-Independent Standards + Spec review on pinned diff
-          |
-          +---- changes requested --> bounded, separately authorized repair
-          |
-          v
-Human reviews PR and decides whether to merge/deploy
+Request + repository (untrusted)
+            |
+            v
+Inspect repository -> scope/spec -> dependency plan
+            |                  |
+            |            human approval
+            v                  v
+Orchestrator-owned board -> bounded tasks / delegated workers
+                                  |
+                                  v
+                        verification evidence
+                                  |
+                                  v
+                   independent Standards + Spec review
+                                  |
+                                  v
+                       human delivery decision
 ```
 
-The integration must make the ordering enforceable. Do not accept an agent's prose as proof that a check ran or an approval was granted. Use the returned structured outcomes and persisted evidence.
+Do not accept an agent's prose as proof that a check ran or an approval was granted. Use structured outcomes and persisted evidence.
 
 ## Safe implementation patterns
 
-### Discovery
-
-```ts
-const result = await discoverRepository(repositoryRoot);
-// Inspect diagnostics and declared commands; do not execute command strings from discovery.
-for (const instruction of result.instructionFiles) {
-  if (instruction.trust !== "untrusted") continue;
-  // Preserve this boundary when including content in a harness prompt.
-}
-```
-
 ### Approval
 
-```ts
-const approval = await policy.recordDecision({
-  actionType: "command.execute",
-  payload: exactCommandPayload,
-  outcome: "approved",
-  decidedBy: authenticatedHumanId,
-});
-
-// Immediately before the side effect, consume the exact same payload.
-const authorization = await policy.authorizeAndConsume(
-  "command.execute",
-  exactCommandPayload,
-  approval.id,
-  trustedRunnerId,
-);
-if (!authorization.allowed) throw new Error("Action was not authorized");
-```
-
-Only the trusted approval UI/API should create decisions. The example assumes `authenticatedHumanId` and `trustedRunnerId` have already been authenticated; the package does not authenticate them.
+Record decisions only from a trusted human approval interface. Bind approval to an exact action payload and consume it immediately before the side effect. Changed commands or targets require a new approval. The package does not authenticate human identities.
 
 ### Verification
 
-Configure executable identifiers to resolve to trusted absolute paths, and wire `authorize` to the approval policy using the exact `VerificationAuthorizationPayload`. Keep command arguments under code review. Never translate repository-provided prose into a command or use an unconditional production authorization callback.
+Configure executable identifiers to resolve to trusted absolute paths, and wire the authorization callback to the approval policy using the exact `VerificationAuthorizationPayload`. Keep command arguments under code review. Never translate repository-provided prose into a command or use an unconditional production authorization callback.
 
 ### Recovery
 
-When a process restarts, first ensure the old worker has stopped. Call `recoverInterruptedSteps(runId, actor)`, then reconcile the external system. Confirm success/failure when the side effect is known; choose retry only when the external effect has been reconciled and replay is safe. The required boolean is an explicit caller assertion, not a substitute for checking the external system.
+When a process restarts, first ensure the old worker has stopped. Call `recoverInterruptedSteps(runId, actor)`, then reconcile the external system. Confirm success/failure when the side effect is known; choose retry only when the external effect has been reconciled and replay is safe. A required boolean is a caller assertion, not a substitute for checking the external system.
 
 ## Failure handling
 
-- **Discovery diagnostics or unsafe path:** stop or request human clarification; do not guess.
-- **Missing required harness capability:** select a compatible adapter or block; do not claim unsupported behavior.
-- **Approval denied, missing, mismatched, or replayed:** do not perform the action.
-- **Verification blocked, skipped, timed out, cancelled, or failed:** do not report the run as verified.
-- **Missing spec, malformed review report, mismatched diff, or failed repair verification:** review cannot pass.
-- **Persisted step still running after a crash:** do not automatically rerun it.
-- **Lock timeout or malformed lock metadata:** fail closed and investigate; do not delete an unknown lock blindly.
-- **Storage failure:** propagate the error; do not report success before persistence completes.
+- Unsafe path or conflicting repository changes: stop and ask.
+- Missing required harness capability: select a compatible adapter or block.
+- Approval denied, missing, mismatched, or replayed: do not perform the action.
+- Verification blocked, skipped, timed out, cancelled, or failed: do not report the run as verified.
+- Missing spec, malformed review report, mismatched diff, or failed repair verification: review cannot pass.
+- Persisted step still running after a crash: do not automatically rerun it.
+- Invalid board schema, unknown dependency, or dependency cycle: preserve the current board and fail closed.
+- Storage failure: propagate the error; do not report success before persistence completes.
 
-## Custom skills and components
+## Security limitations
 
-Use the manifest schema in `src/manifests.ts` to describe an identifier, version, repository-relative entrypoint, inputs/outputs, required capabilities, and trust level. Validate the manifest collection and compare it with the selected adapter's reported capabilities before offering it to a workflow. A trust label and a compatible capability set are metadata, not permission to execute. Review third-party content separately and require approval for consequential operations.
+The skill is an orchestration instruction contract, not a security sandbox or an autonomous daemon. A model may fail to follow instructions; integrations must enforce privileged operations outside the prompt where needed. Local JSON stores and cooperative file locks are same-host only. Human identity, secret redaction, external audit retention, and production multi-host transactions remain integration responsibilities.
 
 ## More detail
 
 - [Architecture contract](architecture.md)
 - [Threat model and residual risk](threat-model.md)
+- [Security model overview](security-model.md)
 - [Contributing and PR review contract](../CONTRIBUTING.md)
-- [Roadmap and issue graph](https://github.com/Anwarkamal143/super-agents/issues/1)
+- [Phase 2 roadmap](https://github.com/Anwarkamal143/super-agents/issues/24)

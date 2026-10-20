@@ -1,0 +1,65 @@
+{
+  "schemaVersion": 1,
+  "factory": {
+    "id": "example-initialization",
+    "title": "Example: introduce a settings page",
+    "request": "Demonstrate the board format only; no work has been run or approved.",
+    "orchestrator": "current-session",
+    "createdAt": "2026-10-20T00:00:00.000Z"
+  },
+  "status": "awaiting_approval",
+  "updatedAt": "2026-10-20T00:00:00.000Z",
+  "tasks": [
+    {
+      "id": "inspect",
+      "title": "Inspect repository",
+      "description": "Read repository guidance and identify the existing stack and test commands.",
+      "status": "ready",
+      "dependsOn": [],
+      "acceptanceCriteria": [
+        "Repository guidance and relevant manifests have been inspected.",
+        "Proposed commands are supported by repository evidence."
+      ],
+      "owner": "orchestrator",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": []
+    },
+    {
+      "id": "plan",
+      "title": "Prepare implementation plan",
+      "description": "Define scope, acceptance criteria, file ownership, risks, and verification.",
+      "status": "pending",
+      "dependsOn": [
+        "inspect"
+      ],
+      "acceptanceCriteria": [
+        "Plan lists acceptance criteria and explicit non-goals.",
+        "Each task has dependencies and bounded ownership."
+      ],
+      "owner": "orchestrator",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": []
+    },
+    {
+      "id": "implement",
+      "title": "Implement approved settings page",
+      "description": "Illustrative planned task; do not execute before explicit user approval.",
+      "status": "needs_approval",
+      "dependsOn": [
+        "plan"
+      ],
+      "acceptanceCriteria": [
+        "Settings page follows the existing design system.",
+        "Focused tests and the repository's full checks pass."
+      ],
+      "owner": "implementation-agent",
+      "attempts": 0,
+      "maxAttempts": 2,
+      "evidence": [],
+      "approvalRequired": true
+    }
+  ],
+  "decisions": []
+}
