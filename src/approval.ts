@@ -193,8 +193,8 @@ export class ApprovalPolicy {
 
       const record = state.approvals.find((item) => item.id === approvalId);
       if (!record) return deny("authorization_denied_missing_approval", "missing_approval");
-      if (record.status !== "active") return deny("authorization_denied_replay", "replay", record);
       if (record.outcome !== "approved") return deny("authorization_denied_mismatch", "denied", record);
+      if (record.status !== "active") return deny("authorization_denied_replay", "replay", record);
       if (record.actionType !== actionType || record.payloadDigest !== payloadDigest) {
         return deny("authorization_denied_mismatch", "mismatch", record);
       }
