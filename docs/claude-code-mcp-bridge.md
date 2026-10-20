@@ -51,6 +51,36 @@ Use the supported Claude Code local/project settings mechanism for your environm
 
 The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `Bash` unless it finds an active approval for the exact canonical `{ toolName, toolInput }` payload. The approval is consumed once. A changed argument or replay is denied. Other tool integrations and external processes are outside this hook's boundary; keep Claude Code's normal permission controls enabled.
 
+## Operator-configured verification runner
+
+The bridge can execute a verification profile through the existing bounded runner. Configure `FACTORY_VERIFICATION_PROFILE` in the MCP server process environment with operator-reviewed JSON. The profile is **not** accepted as an MCP tool argument and is never discovered from repository files.
+
+Example profile (replace the executable path and review the exact arguments for your environment):
+
+```json
+{
+  "allowedExecutables": {
+    "node": "/absolute/path/to/node"
+  },
+  "checks": [
+    {
+      "id": "typecheck",
+      "kind": "typecheck",
+      "executable": "node",
+      "args": ["./node_modules/typescript/bin/tsc", "--noEmit"],
+      "cwd": ".",
+      "timeoutMs": 60000,
+      "maxOutputBytes": 65536,
+      "environmentAllowlist": ["PATH", "HOME", "TMPDIR"]
+    }
+  ]
+}
+```
+
+Call `factory_verification_run` with the workflow ID and current revision. The bridge validates the profile through the verification runner, then requests a fresh human approval for each exact executable, argument list, resolved working directory, environment-key list, timeout, and output limit before spawning that process. The runner uses `shell: false`, confines the working directory to the repository, and bounds runtime and captured output. The MCP response returns output digests and byte counts, not raw stdout/stderr; persisted evidence is labelled `runner_observed`.
+
+**The profile is privileged operator configuration.** An approved interpreter can execute code supplied in its arguments, and package scripts may launch further processes. Review every executable and argument in the profile; do not blindly trust a repository's scripts or set the profile from repository-controlled data. This local runner is not a sandbox. Keep host permissions and the PreToolUse gate enabled. A declined or unavailable approval produces blocked/incomplete evidence and does not spawn that check. Runner-observed provenance means this process observed the configured command locally; it is not a cryptographic attestation or proof of an independently trusted runner.
+
 ## Workflow tools
 
 1. Call `factory_session_create` with a stable request ID.
@@ -58,8 +88,8 @@ The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and 
 3. Call `factory_plan_request_approval` with the current revision and exact plan. A human decision must arrive through MCP elicitation. Decline, cancel, unsupported elicitation, malformed response, timeout, or persistence failure blocks the plan.
 4. Continue work in the active session only after the plan is approved.
 5. Before each governed native write or command, call `factory_action_request_approval` with the native tool name and its exact `toolInput`. The hook compares that payload to the real PreToolUse input and consumes the one-time approval.
-6. Submit evidence with `factory_evidence_submit`. Provenance is persisted on every evidence record: model-submitted claims use `source: model_reported`, subprocess verification evidence uses `source: runner_observed`, and independent review results use `source: review_engine`. A model cannot promote its own claim to runner evidence. `factory_delivery_status` reports counts and pass states by source and always keeps human delivery approval required.
-7. Use `factory_phase_transition` with the latest expected revision. `factory_delivery_status` only reports state and never creates a PR, merges, deploys, or publishes.
+6. Call `factory_verification_run` to execute the operator-configured verification profile. Each check needs a fresh exact invocation approval and emits `runner_observed` evidence. Use `factory_evidence_submit` only for claims made by the active model; those are always labelled `model_reported`.
+7. `factory_delivery_status` reports evidence counts and pass states by provenance and always keeps human delivery approval required. Use `factory_phase_transition` with the latest expected revision. The bridge never creates a PR, merges, deploys, or publishes.
 
 ## Protocol and trust limitations
 
