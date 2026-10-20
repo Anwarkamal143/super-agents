@@ -136,6 +136,7 @@ test("audit records contain payload digests, not raw payloads, rationale, or sec
     assert.equal(serialized.includes("top-secret"), false);
     assert.equal(serialized.includes("private rationale"), false);
     assert.equal(serialized.includes("internal.example"), false);
+    assert.equal(state.events[0].decisionOutcome, "approved");
     assert.match(state.approvals[0].payloadDigest, /^[a-f0-9]{64}$/);
   });
 });
