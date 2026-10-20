@@ -50,6 +50,7 @@ export interface ApprovalAuditEvent {
   readonly actionType: string;
   readonly payloadDigest: string;
   readonly actor: string;
+  readonly decisionOutcome?: PolicyDecisionOutcome;
   readonly at: string;
 }
 
@@ -159,6 +160,7 @@ export class ApprovalPolicy {
         actionType: record.actionType,
         payloadDigest,
         actor: record.decidedBy,
+        decisionOutcome: record.outcome,
         at,
       };
       await this.store.save({ approvals: [...state.approvals, record], events: [...state.events, event] });
