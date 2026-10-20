@@ -174,9 +174,9 @@ export function validateFactoryBoard(input: unknown): FactoryBoardValidation {
     if (!nonEmpty(raw["id"])) errors.push(`${prefix}.id must be a non-empty string.`);
     else if (decisionIds.has(raw["id"])) errors.push(`Duplicate decision id: ${raw["id"]}.`);
     else decisionIds.add(raw["id"]);
-    if (!nonEmpty(raw.scope) || !nonEmpty(raw.actor)) errors.push(`${prefix} requires a scope and actor.`);
-    if (!(["approved", "denied", "revoked"] as readonly unknown[]).includes(raw.outcome)) errors.push(`${prefix}.outcome is unsupported.`);
-    if (!isDateTime(raw.decidedAt)) errors.push(`${prefix}.decidedAt must be a date-time string.`);
+    if (!nonEmpty(raw["scope"]) || !nonEmpty(raw["actor"])) errors.push(`${prefix} requires a scope and actor.`);
+    if (!(["approved", "denied", "revoked"] as readonly unknown[]).includes(raw["outcome"])) errors.push(`${prefix}.outcome is unsupported.`);
+    if (!isDateTime(raw["decidedAt"])) errors.push(`${prefix}.decidedAt must be a date-time string.`);
   }
 
   return { valid: errors.length === 0, errors };
