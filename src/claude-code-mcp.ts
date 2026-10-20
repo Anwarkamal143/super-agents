@@ -4,7 +4,7 @@
  * Deliberately uses only Node.js built-ins and existing factory stores. This
  * avoids adding an unpinned MCP SDK to the current dependency-free runtime;
  * protocol behavior is limited to initialize, tools/list, tools/call, and
- * client-initiated elicitation/create responses.
+ * server-initiated elicitation/create responses.
  */
 import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
