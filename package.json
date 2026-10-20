@@ -33,7 +33,9 @@
     "test": "npm run build && node --test tests/*.test.mjs",
     "test:package": "npm run build && node --test tests/package-smoke.test.mjs",
     "check": "npm run typecheck && npm test",
-    "prepack": "npm run build"
+    "prepack": "npm run build",
+    "factory:mcp": "node dist/claude-code-mcp.js",
+    "factory:hook": "node dist/claude-code-pretool-hook.js"
   },
   "devDependencies": {
     "@types/node": "22.19.0",
