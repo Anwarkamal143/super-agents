@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { withFileLock } from "./file-lock.js";
 import type { VerificationEvidence, WorkflowRun, WorkflowStatus } from "./domain.js";
 import { transitionWorkflow } from "./workflow.js";
 
@@ -10,9 +11,15 @@ export interface WorkflowEvent {
   readonly from: WorkflowStatus | null;
   readonly to: WorkflowStatus;
   readonly at: string;
+  readonly kind?: "transition" | "step_started" | "step_finished" | "step_interrupted" | "step_reconciled";
+  readonly stepId?: string;
+  readonly stepStatus?: StepStatus;
+  readonly actor?: string;
+  /** Digest only; free-form summaries/reasons are deliberately not copied into the audit trail. */
+  readonly detailDigest?: string;
 }
 
-export type StepStatus = "running" | "succeeded" | "failed";
+export type StepStatus = "running" | "succeeded" | "failed" | "interrupted";
 
 export interface WorkflowStepRecord {
   readonly id: string;
@@ -132,7 +139,7 @@ export class WorkflowOrchestrator {
       }
       const created: PersistedWorkflow = {
         run,
-        events: [{ runId: run.id, revision: run.revision, from: null, to: run.status, at: run.createdAt }],
+        events: [{ runId: run.id, revision: run.revision, from: null, to: run.status, at: run.createdAt, kind: "transition" }],
         steps: {},
         evidence: [],
       };
