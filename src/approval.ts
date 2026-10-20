@@ -13,13 +13,13 @@ export const CONSEQUENT_ACTIONS = [
 ] as const;
 
 export type ConsequentialAction = (typeof CONSEQUENT_ACTIONS)[number];
-export type ApprovalOutcome = "approved" | "denied";
+export type PolicyDecisionOutcome = "approved" | "denied";
 export type ApprovalStatus = "active" | "consumed" | "revoked";
 
 export interface ApprovalDecisionInput {
   readonly actionType: string;
   readonly payload: unknown;
-  readonly outcome: ApprovalOutcome;
+  readonly outcome: PolicyDecisionOutcome;
   readonly decidedBy: string;
   readonly rationale?: string;
 }
@@ -28,7 +28,7 @@ export interface ApprovalRecord {
   readonly id: string;
   readonly actionType: ConsequentialAction;
   readonly payloadDigest: string;
-  readonly outcome: ApprovalOutcome;
+  readonly outcome: PolicyDecisionOutcome;
   readonly decidedBy: string;
   readonly decidedAt: string;
   readonly status: ApprovalStatus;
