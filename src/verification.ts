@@ -32,6 +32,7 @@ export interface VerificationConfig {
   readonly now?: () => string;
   readonly id?: () => string;
   readonly spawnProcess?: typeof spawn;
+  readonly signal?: AbortSignal;
 }
 
 export interface VerificationAuthorizationPayload {
@@ -145,6 +146,7 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
       spawnProcess,
       now,
       id,
+      signal: config.signal,
     }));
   }
 
@@ -226,10 +228,11 @@ interface ExecuteCheckInput {
   readonly spawnProcess: typeof spawn;
   readonly now: () => string;
   readonly id: () => string;
+  readonly signal?: AbortSignal;
 }
 
 async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvidenceRecord> {
-  const { check, executable, cwd, timeoutMs, maxOutputBytes, env, spawnProcess, now, id } = input;
+  const { check, executable, cwd, timeoutMs, maxOutputBytes, env, spawnProcess, now, id, signal } = input;
   const startedAt = now();
   const start = performance.now();
   const stdoutHash = createHash("sha256");
@@ -247,14 +250,13 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let child: ChildProcess | undefined;
-  let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;
+  let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;\n  let cancelListener: (() => void) | undefined;
 
   const resultPromise = new Promise<VerificationEvidenceRecord>((resolve) => { resolveResult = resolve; });
   const finish = (exitCode: number | null) => {
     if (settled) return;
     settled = true;
-    if (timer) clearTimeout(timer);
-    if (killTimer) clearTimeout(killTimer);
+    if (timer) clearTimeout(timer);\n    if (killTimer) clearTimeout(killTimer);\n    if (cancelListener) signal?.removeEventListener("abort", cancelListener);
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
       spawnError || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
@@ -288,8 +290,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     killTimer.unref();
   };
 
-  try {
-    child = spawnProcess(executable, [...check.args], {
+  if (signal?.aborted) {\n    cancelled = true;\n    finish(null);\n    return resultPromise;\n  }\n\n  try {\n    child = spawnProcess(executable, [...check.args], {
       cwd,
       env,
       shell: false,
@@ -324,8 +325,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     spawnError = safeError(error, "Verification process failed to start.");
     finish(null);
   });
-  child.once("close", (code) => finish(code));
-  timer = setTimeout(() => stop("timed_out"), timeoutMs);
+  child.once("close", (code) => finish(code));\n  cancelListener = () => stop("cancelled");\n  signal?.addEventListener("abort", cancelListener, { once: true });\n  timer = setTimeout(() => stop("timed_out"), timeoutMs);
   timer.unref();
   return resultPromise;
 }
