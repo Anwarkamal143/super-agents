@@ -37,7 +37,7 @@ For a complete, safe practice run, follow the [sample target repository walkthro
 - A Claude Code adapter behind a harness-agnostic contract.
 - Persisted workflow state, revision checks, interrupted-step recovery, and same-host cooperative locking.
 - Default-deny action-scoped approvals with canonical payload binding and one-time consumption.
-- An approval-gated verification runner with explicit executable allowlists and bounded evidence.
+- An approval-gated verification runner with explicit executable allowlists, bounded evidence, and fail-fast denial/cancellation semantics.
 - Independent Standards and Spec review contracts with pinned diffs and bounded, verified repair.
 - Declarative skill/component manifests and a runtime factory-board invariant validator.
 
