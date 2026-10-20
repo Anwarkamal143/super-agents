@@ -250,13 +250,16 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
   let child: ChildProcess | undefined;
-  let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;\n  let cancelListener: (() => void) | undefined;
+  let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;
+  let cancelListener: (() => void) | undefined;
 
   const resultPromise = new Promise<VerificationEvidenceRecord>((resolve) => { resolveResult = resolve; });
   const finish = (exitCode: number | null) => {
     if (settled) return;
     settled = true;
-    if (timer) clearTimeout(timer);\n    if (killTimer) clearTimeout(killTimer);\n    if (cancelListener) signal?.removeEventListener("abort", cancelListener);
+    if (timer) clearTimeout(timer);
+    if (killTimer) clearTimeout(killTimer);
+    if (cancelListener) signal?.removeEventListener("abort", cancelListener);
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
       spawnError || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
@@ -290,7 +293,14 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     killTimer.unref();
   };
 
-  if (signal?.aborted) {\n    cancelled = true;\n    finish(null);\n    return resultPromise;\n  }\n\n  try {\n    child = spawnProcess(executable, [...check.args], {
+  if (signal?.aborted) {
+    cancelled = true;
+    finish(null);
+    return resultPromise;
+  }
+
+  try {
+    child = spawnProcess(executable, [...check.args], {
       cwd,
       env,
       shell: false,
@@ -325,7 +335,10 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     spawnError = safeError(error, "Verification process failed to start.");
     finish(null);
   });
-  child.once("close", (code) => finish(code));\n  cancelListener = () => stop("cancelled");\n  signal?.addEventListener("abort", cancelListener, { once: true });\n  timer = setTimeout(() => stop("timed_out"), timeoutMs);
+  child.once("close", (code) => finish(code));
+  cancelListener = () => stop("cancelled");
+  signal?.addEventListener("abort", cancelListener, { once: true });
+  timer = setTimeout(() => stop("timed_out"), timeoutMs);
   timer.unref();
   return resultPromise;
 }
