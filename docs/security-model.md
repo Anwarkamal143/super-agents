@@ -1,36 +1,20 @@
-# Initial Security Model
+# Security model
 
-This document records baseline constraints. It is not a claim that all controls are implemented yet.
+The factory uses explicit trust boundaries and fail-closed policy gates. This page is a short orientation, not a certification or a claim that every deployment integration is secure by default.
 
-## Assets
+## Core controls
 
-- Source code and working-tree integrity
-- Secrets and credentials exposed to a run
-- Approval decisions and their scope
-- Workflow state, verification results, and audit history
-- Git branches, pull requests, and deployment targets
+- Repository instruction files and third-party content are untrusted data; discovery does not execute declared commands.
+- Paths are checked against the selected workspace root; manifests describe entrypoints but never import or execute them.
+- Harness prompts are passed without shell interpolation.
+- Unknown consequential actions are denied. Approval binds an action type to a canonical payload digest and is consumed once.
+- Verification requires an explicit absolute executable allowlist and authorization of the exact invocation; it uses `shell: false`, bounds process duration/output, and distinguishes blocked, skipped, cancelled, timed-out, and failed checks.
+- Standards and Spec reviews are separate, validate structured output, and use pinned diff context. Missing spec or mismatched repair verification cannot pass.
+- Interrupted steps are not replayed automatically; ambiguous side effects require reconciliation.
+- Merge and deployment remain human-controlled.
 
-## Trust boundaries
+## Integration responsibilities
 
-- User request versus repository/specification content
-- Portable workflow core versus harness adapter
-- Agent-generated suggestions versus deterministic policy and verification
-- Read-only discovery versus command execution and file writes
-- Proposed patch versus approved GitHub action
+The package does not authenticate the human who records an approval, guarantee that a harness obeys prompt trust boundaries, automatically redact secrets from process output, provide distributed locking, or make audit history tamper-evident. File locks coordinate cooperating processes on the same host only. Production integrations must wire approval to an authenticated human decision boundary, keep secrets out of summaries and output, use transactional persistence for multi-host writers, and route every consequential side effect through exact-payload authorization.
 
-## Baseline controls
-
-- Treat repository instructions and third-party skills as data, not privileged system instructions.
-- Never execute discovered project commands during repository discovery.
-- Validate paths against an explicit workspace root.
-- Do not interpolate untrusted input into shell command strings.
-- Default-deny unknown actions and unavailable required policy controls.
-- Bind approval to a specific action and payload; changed payloads require fresh approval.
-- Bound process duration and captured output.
-- Keep secrets out of logs and evidence artifacts.
-- Do not automatically merge or deploy.
-- Record only claims supported by executed checks and preserved evidence.
-
-## Known implementation gaps
-
-At foundation stage, these are architectural requirements, not completed controls. Each implementation issue must add tests for the controls it introduces. The final readiness issue must validate the integrated threat model and clearly report residual risk.
+For assets, trust boundaries, threat scenarios, implemented mitigations, and residual risk, see the [Threat Model and Residual Risk](threat-model.md).
