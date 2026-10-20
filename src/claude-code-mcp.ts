@@ -154,7 +154,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           return { approved: false, blocked: true, reason: "Human declined, cancelled, or did not explicitly approve this exact action." };
         }
         // Elicitation gives a human decision; the host does not expose a cryptographically authenticated actor identity.
-        const approval = await approvals.recordDecision({ actionType, payload, outcome: "approved", decidedBy: "claude-code-elicitation-host", rationale: reason });
+        const approval = await approvals.recordDecision({ actionType, payload, outcome: "approved", decidedBy: "claude-code-elicitation-host", rationale: "factory-run-id:" + runId + "\n" + reason });
         return { approved: true, approvalId: approval.id, payloadDigest: digest, singleUse: true, actorIdentity: "host does not expose authenticated identity" };
       }
       case "factory_evidence_submit": {
