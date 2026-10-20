@@ -24,7 +24,7 @@ const TOOLS = [
   { name: "factory_session_create", description: "Create a persisted factory workflow session.", inputSchema: { type: "object", properties: { requestId: { type: "string", minLength: 1 } }, required: ["requestId"], additionalProperties: false } },
   { name: "factory_session_get", description: "Read a workflow session, its revision, audit events, steps and evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
   { name: "factory_plan_request_approval", description: "Ask the human to approve the exact plan in the active host session. Decline, cancel or unsupported elicitation blocks implementation.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, plan: { type: "string", minLength: 1, maxLength: 12000 } }, required: ["runId", "expectedRevision", "plan"], additionalProperties: false } },
-  { name: "factory_phase_transition", description: "Advance a workflow only with the expected persisted revision and a legal transition.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, to: { type: "string", enum: ["ready", "running", "awaiting_approval", "verifying", "reviewing", "completed", "failed", "cancelled"] } }, required: ["runId", "expectedRevision", "to"], additionalProperties: false } },
+  { name: "factory_phase_transition", description: "Advance a workflow only with the expected persisted revision and a legal transition.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, to: { type: "string", enum: ["ready", "running", "awaiting_approval", "verifying", "reviewing", "failed", "cancelled"] } }, required: ["runId", "expectedRevision", "to"], additionalProperties: false } },
   { name: "factory_action_request_approval", description: "Request fresh human approval for one exact native Claude Code tool input. Payload must be {toolName, toolInput}; it is bound to a SHA-256 digest and consumed once by the PreToolUse gate.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, actionType: { type: "string", enum: ["file.write", "command.execute"] }, toolName: { type: "string", enum: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"] }, toolInput: { type: "object" }, reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["runId", "actionType", "toolName", "toolInput", "reason"], additionalProperties: false } },
   { name: "factory_evidence_submit", description: "Persist bounded evidence from the active model session. Model-reported evidence is not trusted runner evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, summary: { type: "string", minLength: 1, maxLength: 4000 }, kind: { type: "string", enum: ["command", "test", "typecheck", "review", "other"] }, outcome: { type: "string", enum: ["passed", "failed", "skipped", "unknown"] } }, required: ["runId", "expectedRevision", "summary", "kind", "outcome"], additionalProperties: false } },
   { name: "factory_delivery_status", description: "Report delivery readiness; never creates PRs, merges, deploys or publishes.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
@@ -83,7 +83,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     const result = response.result as JsonObject | undefined;
     const action = result?.["action"];
     if (action !== "accept" && action !== "decline" && action !== "cancel") throw new Error("Malformed elicitation response; action blocked.");
-    const content = result?.["content"] && typeof result.content === "object" ? result.content as JsonObject : undefined;
+    const content = result?.["content"] && typeof result["content"] === "object" ? result["content"] as JsonObject : undefined;
     return { action, ...(content ? { content } : {}) };
   };
 
@@ -131,7 +131,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const runId = requireString(args, "runId");
         const revision = requireInteger(args, "expectedRevision");
         const to = requireString(args, "to") as WorkflowStatus;
-        if (!(to in WORKFLOW_TRANSITIONS)) throw new TypeError("Unknown workflow phase.");
+        if (!(to in WORKFLOW_TRANSITIONS) || to === "completed") throw new TypeError("Unknown or gated workflow phase; completion is not exposed by this bridge.");
         const record = await orchestrator.getWorkflow(runId);
         if (!record) throw new Error("Workflow session not found.");
         if (record.run.revision !== revision) throw new WorkflowConflictError("Stale revision; reload the session.");
@@ -204,7 +204,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           send({ jsonrpc: "2.0", id: message.id, error: { code: -32602, message: "This minimal bridge supports only MCP protocol 2025-11-25 elicitation. Upgrade the bridge before using a host that negotiates another protocol." } });
           return;
         }
-        clientElicitation = Boolean(capabilities?.["elicitation"] && typeof capabilities.elicitation === "object" && (capabilities["elicitation"] as JsonObject)["form"]);
+        clientElicitation = Boolean(capabilities?.["elicitation"] && typeof capabilities["elicitation"] === "object" && (capabilities["elicitation"] as JsonObject)["form"]);
         send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. This server supports only MCP 2025-11-25 elicitation. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
         return;
       }
