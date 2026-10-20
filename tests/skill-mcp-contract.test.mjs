@@ -32,6 +32,6 @@ test("usage documentation distinguishes MCP wiring from the library API and real
   const usage = await readFile(usagePath, "utf8");
   assert.match(usage, /use the opt-in MCP bridge tools/i);
   assert.match(usage, /does not automatically invoke the library function `runFactoryWorkflow`/);
-  assert.match(usage, /real interactive Claude Code approval smoke test remains **NOT RUN**/);
+  assert.ok(usage.includes("real interactive Claude Code approval smoke test remains **NOT RUN**"));
   assert.match(usage, /Unit tests and skill text do not prove actual host compatibility/);
 });
