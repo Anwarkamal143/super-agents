@@ -82,3 +82,49 @@ test("real Claude CLI integration is opt-in and uses an isolated temporary direc
     await rm(cwd, { recursive: true, force: true });
   }
 });
+
+
+test("Claude adapter bounds combined stdout/stderr and reports truncation", async () => {
+  const spawnProcess = (_executable, args) => fakeChildProcess((child) => queueMicrotask(() => {
+    if (args[0] === "--version") child.stdout.end("2.0.0\\n");
+    else if (args[0] === "--help") child.stdout.end("Usage: claude -p [options]\\n");
+    else child.stdout.end("0123456789");
+    child.emit("close", 0);
+  }));
+  const adapter = new ClaudeCodeAdapter({ spawnProcess });
+  const result = await adapter.invoke({
+    prompt: "emit output",
+    cwd: "/tmp",
+    timeoutMs: 500,
+    maxOutputBytes: 4,
+  });
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.outputTruncated, true);
+  assert.ok(Buffer.byteLength(result.stdout) <= 4);
+  assert.notEqual(result.outcome, "succeeded");
+});
+
+test("Claude adapter reports non-zero prompt exit as failure", async () => {
+  const spawnProcess = (_executable, args) => fakeChildProcess((child) => queueMicrotask(() => {
+    if (args[0] === "--version") {
+      child.stdout.end("2.0.0\\n");
+      child.emit("close", 0);
+    } else if (args[0] === "--help") {
+      child.stdout.end("Usage: claude -p [options]\\n");
+      child.emit("close", 0);
+    } else {
+      child.stderr.end("prompt failed\\n");
+      child.emit("close", 7);
+    }
+  }));
+  const adapter = new ClaudeCodeAdapter({ spawnProcess });
+  const result = await adapter.invoke({
+    prompt: "fail",
+    cwd: "/tmp",
+    timeoutMs: 500,
+    maxOutputBytes: 100,
+  });
+  assert.equal(result.outcome, "failed");
+  assert.equal(result.exitCode, 7);
+  assert.notEqual(result.outcome, "succeeded");
+});
