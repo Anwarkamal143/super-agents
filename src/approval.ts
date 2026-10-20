@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { withFileLock } from "./file-lock.js";
 
 export const CONSEQUENT_ACTIONS = [
   "file.write",
@@ -62,10 +63,15 @@ export interface ApprovalLedgerState {
 export interface ApprovalStore {
   load(): Promise<ApprovalLedgerState>;
   save(state: ApprovalLedgerState): Promise<void>;
+  withExclusive?<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export class JsonFileApprovalStore implements ApprovalStore {
   constructor(private readonly filePath: string) {}
+
+  withExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    return withFileLock(`${this.filePath}.lock`, operation);
+  }
 
   async load(): Promise<ApprovalLedgerState> {
     try {
@@ -109,7 +115,7 @@ export interface ApprovalPolicyOptions {
 /**
  * Records scoped human decisions and consumes each approval at most once.
  * A decision is bound to an action type and a canonical SHA-256 payload digest.
- * The policy is default-deny; its JSON store supports a single writer only.
+ * The policy is default-deny; file-backed operations use a same-host cooperative lock, not a distributed transaction.
  */
 export class ApprovalPolicy {
   private tail: Promise<void> = Promise.resolve();
@@ -122,7 +128,8 @@ export class ApprovalPolicy {
   }
 
   private exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(operation, operation);
+    const run = () => this.store.withExclusive ? this.store.withExclusive(operation) : operation();
+    const result = this.tail.then(run, run);
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }

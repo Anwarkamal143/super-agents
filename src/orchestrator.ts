@@ -1,6 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
+import { withFileLock } from "./file-lock.js";
 import type { VerificationEvidence, WorkflowRun, WorkflowStatus } from "./domain.js";
 import { transitionWorkflow } from "./workflow.js";
 
@@ -10,9 +11,15 @@ export interface WorkflowEvent {
   readonly from: WorkflowStatus | null;
   readonly to: WorkflowStatus;
   readonly at: string;
+  readonly kind?: "transition" | "step_started" | "step_finished" | "step_interrupted" | "step_reconciled";
+  readonly stepId?: string;
+  readonly stepStatus?: StepStatus;
+  readonly actor?: string;
+  /** Digest only; free-form summaries/reasons are deliberately not copied into the audit trail. */
+  readonly detailDigest?: string;
 }
 
-export type StepStatus = "running" | "succeeded" | "failed";
+export type StepStatus = "running" | "succeeded" | "failed" | "interrupted";
 
 export interface WorkflowStepRecord {
   readonly id: string;
@@ -20,6 +27,7 @@ export interface WorkflowStepRecord {
   readonly startedAt: string;
   readonly finishedAt?: string;
   readonly summary?: string;
+  readonly attempt?: number;
 }
 
 export interface PersistedWorkflow {
@@ -32,6 +40,7 @@ export interface PersistedWorkflow {
 export interface WorkflowStore {
   load(): Promise<readonly PersistedWorkflow[]>;
   save(workflows: readonly PersistedWorkflow[]): Promise<void>;
+  withExclusive?<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export class WorkflowConflictError extends Error {
@@ -43,6 +52,10 @@ export class WorkflowConflictError extends Error {
 
 export class JsonFileWorkflowStore implements WorkflowStore {
   constructor(private readonly filePath: string) {}
+
+  withExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    return withFileLock(`${this.filePath}.lock`, operation);
+  }
 
   async load(): Promise<readonly PersistedWorkflow[]> {
     try {
@@ -84,7 +97,8 @@ export interface OrchestratorOptions {
 export type StepStartResult =
   | { readonly status: "started"; readonly step: WorkflowStepRecord }
   | { readonly status: "already_completed"; readonly step: WorkflowStepRecord }
-  | { readonly status: "already_running"; readonly step: WorkflowStepRecord };
+  | { readonly status: "already_running"; readonly step: WorkflowStepRecord }
+  | { readonly status: "reconciliation_required"; readonly step: WorkflowStepRecord };
 
 export class WorkflowOrchestrator {
   private tail: Promise<void> = Promise.resolve();
@@ -98,7 +112,8 @@ export class WorkflowOrchestrator {
   }
 
   private exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(operation, operation);
+    const run = () => this.store.withExclusive ? this.store.withExclusive(operation) : operation();
+    const result = this.tail.then(run, run);
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
@@ -132,7 +147,7 @@ export class WorkflowOrchestrator {
       }
       const created: PersistedWorkflow = {
         run,
-        events: [{ runId: run.id, revision: run.revision, from: null, to: run.status, at: run.createdAt }],
+        events: [{ runId: run.id, revision: run.revision, from: null, to: run.status, at: run.createdAt, kind: "transition" }],
         steps: {},
         evidence: [],
       };
@@ -163,6 +178,7 @@ export class WorkflowOrchestrator {
           from: current.run.status,
           to,
           at,
+          kind: "transition",
         }],
       };
       const next = [...workflows];
@@ -182,9 +198,18 @@ export class WorkflowOrchestrator {
       const existing = current.steps[stepId];
       if (existing?.status === "succeeded") return { status: "already_completed", step: existing };
       if (existing?.status === "running") return { status: "already_running", step: existing };
-      const step: WorkflowStepRecord = { id: stepId, status: "running", startedAt: this.now() };
+      if (existing?.status === "interrupted") return { status: "reconciliation_required", step: existing };
+      const at = this.now();
+      const step: WorkflowStepRecord = { id: stepId, status: "running", startedAt: at, attempt: (existing?.attempt ?? 0) + 1 };
       const next = [...workflows];
-      next[index] = { ...current, steps: { ...current.steps, [stepId]: step } };
+      next[index] = {
+        ...current,
+        steps: { ...current.steps, [stepId]: step },
+        events: [...current.events, {
+          runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
+          at, kind: "step_started", stepId, stepStatus: "running",
+        }],
+      };
       await this.writeAll(next);
       return { status: "started", step };
     });
@@ -206,23 +231,103 @@ export class WorkflowOrchestrator {
       if (!existing || existing.status !== "running") {
         throw new WorkflowConflictError(`Step is not running: ${stepId}`);
       }
+      const at = this.now();
       const step: WorkflowStepRecord = {
-        id: stepId,
-        status: outcome,
-        startedAt: existing.startedAt,
-        finishedAt: this.now(),
-        summary,
+        id: stepId, status: outcome, startedAt: existing.startedAt, finishedAt: at,
+        summary, attempt: existing.attempt ?? 1,
       };
       const next = [...workflows];
       next[index] = {
         ...current,
         steps: { ...current.steps, [stepId]: step },
+        events: [...current.events, {
+          runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
+          at, kind: "step_finished", stepId, stepStatus: outcome,
+          detailDigest: digestText(summary),
+        }],
         evidence: evidence ? [...current.evidence, evidence] : current.evidence,
       };
       await this.writeAll(next);
       return step;
     });
   }
+  async recoverInterruptedSteps(runId: string, actor: string): Promise<readonly WorkflowStepRecord[]> {
+    return this.exclusive(async () => {
+      if (!actor.trim()) throw new TypeError("Recovery actor must be non-empty.");
+      const workflows = await this.readAll();
+      const index = workflows.findIndex((item) => item.run.id === runId);
+      if (index < 0) throw new WorkflowConflictError(`Workflow run not found: ${runId}`);
+      const current = workflows[index]!;
+      const at = this.now();
+      const steps: Record<string, WorkflowStepRecord> = { ...current.steps };
+      const events: WorkflowEvent[] = [...current.events];
+      const recovered: WorkflowStepRecord[] = [];
+      for (const [stepId, existing] of Object.entries(current.steps)) {
+        if (existing.status !== "running") continue;
+        const step: WorkflowStepRecord = { ...existing, status: "interrupted" };
+        steps[stepId] = step;
+        recovered.push(step);
+        events.push({
+          runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
+          at, kind: "step_interrupted", stepId, stepStatus: "interrupted", actor,
+        });
+      }
+      if (recovered.length > 0) {
+        const next = [...workflows];
+        next[index] = { ...current, steps, events };
+        await this.writeAll(next);
+      }
+      return recovered;
+    });
+  }
+
+  async resolveInterruptedStep(
+    runId: string,
+    stepId: string,
+    resolution: "confirm_succeeded" | "confirm_failed" | "retry",
+    actor: string,
+    reason: string,
+    options: { readonly externalEffectReconciled?: boolean } = {},
+  ): Promise<WorkflowStepRecord> {
+    return this.exclusive(async () => {
+      if (!actor.trim()) throw new TypeError("Recovery actor must be non-empty.");
+      if (!reason.trim()) throw new TypeError("A reconciliation reason is required.");
+      if (resolution === "retry" && options.externalEffectReconciled !== true) {
+        throw new WorkflowConflictError("Retry requires explicit confirmation that the external effect was reconciled and replay is safe.");
+      }
+      const workflows = await this.readAll();
+      const index = workflows.findIndex((item) => item.run.id === runId);
+      if (index < 0) throw new WorkflowConflictError(`Workflow run not found: ${runId}`);
+      const current = workflows[index]!;
+      const existing = current.steps[stepId];
+      if (!existing || existing.status !== "interrupted") {
+        throw new WorkflowConflictError(`Step is not awaiting reconciliation: ${stepId}`);
+      }
+      const at = this.now();
+      const status: StepStatus = resolution === "confirm_succeeded" ? "succeeded"
+        : resolution === "confirm_failed" ? "failed" : "running";
+      const step: WorkflowStepRecord = resolution === "retry"
+        ? { id: stepId, status, startedAt: at, attempt: (existing.attempt ?? 1) + 1 }
+        : { ...existing, status, finishedAt: at, summary: `Reconciled: ${resolution}` };
+      const next = [...workflows];
+      next[index] = {
+        ...current,
+        steps: { ...current.steps, [stepId]: step },
+        events: [...current.events, {
+          runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
+          at, kind: "step_reconciled", stepId, stepStatus: status, actor,
+          detailDigest: digestText(reason),
+        }],
+      };
+      await this.writeAll(next);
+      return step;
+    });
+  }
+
+}
+
+function digestText(value: string): string {
+  return createHash("sha256").update(value, "utf8").digest("hex");
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
