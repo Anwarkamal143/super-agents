@@ -167,6 +167,7 @@ export async function runFactoryWorkflow(options: FactoryRunOptions): Promise<Fa
   const verificationEvidence: VerificationEvidence = {
     id: `verification-${run.id}`,
     runId: run.id,
+    source: "runner_observed",
     kind: "command",
     outcome: verification.status === "passed" ? "passed" : verification.status === "failed" ? "failed" : "unknown",
     summary: `Verification ${verification.status}; ${verification.checks.length} check(s) observed.`,
