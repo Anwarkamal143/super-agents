@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { spawn } from "node:child_process";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -642,4 +642,50 @@ test("MCP bridge never grants action approval after parent request cancellation 
   client.respondToElicitation(elicitation.id, "accept");
   const hookResult = await runHook(cwd, "Write", toolInput);
   assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
+});
+
+
+test("MCP bridge fails closed when an accepted action cannot be persisted to the approval ledger", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-approval-store-failure-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "store-failure-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "approval-store-failure" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve the plan before testing approval persistence failure.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/store-failure.txt", content: "must remain unapproved" };
+  const stateDirectory = path.join(cwd, ".factory-state");
+  await mkdir(stateDirectory, { recursive: true });
+  // Corrupt the approval ledger after plan approval but before the accepted action is persisted.
+  await writeFile(path.join(stateDirectory, "approvals.json"), "{invalid-json", "utf8");
+
+  const response = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput,
+      reason: "Ensure persistence failure cannot turn acceptance into authorization.",
+    },
+  });
+  assert.equal(response.result?.isError, true);
+  assert.doesNotMatch(response.result?.content?.[0]?.text ?? "", /"approved"\s*:\s*true/);
+
+  const hookResult = await runHook(cwd, "Write", toolInput);
+  assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(hookResult.hookSpecificOutput.permissionDecisionReason, /approval|state|persist|ledger|JSON/i);
 });
