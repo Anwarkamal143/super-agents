@@ -188,11 +188,12 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
 
         const rawProfile = process.env["FACTORY_VERIFICATION_PROFILE"];
         if (!rawProfile) throw new Error("Verification is not configured. Set FACTORY_VERIFICATION_PROFILE to an operator-reviewed JSON profile.");
+        if (Buffer.byteLength(rawProfile, "utf8") > 64 * 1024) throw new TypeError("FACTORY_VERIFICATION_PROFILE exceeds the 64 KiB configuration limit.");
         let profile: { checks: VerificationCheck[]; allowedExecutables: Record<string, string> };
         try {
           const parsed: unknown = JSON.parse(rawProfile);
           const value = requireObject(parsed, "FACTORY_VERIFICATION_PROFILE");
-          if (!Array.isArray(value["checks"]) || value["checks"].length === 0) throw new TypeError("checks must be a non-empty array.");
+          if (!Array.isArray(value["checks"]) || value["checks"].length === 0 || value["checks"].length > 50) throw new TypeError("checks must contain between 1 and 50 entries.");
           const allowedExecutables = requireObject(value["allowedExecutables"], "allowedExecutables") as unknown as Record<string, string>;
           if (Object.values(allowedExecutables).some((executable) => typeof executable !== "string" || !path.isAbsolute(executable))) {
             throw new TypeError("allowedExecutables must map stable IDs to absolute executable paths.");
