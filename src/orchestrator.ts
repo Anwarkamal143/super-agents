@@ -74,7 +74,7 @@ export class JsonFileWorkflowStore implements WorkflowStore {
     await mkdir(directory, { recursive: true });
     const temporaryPath = `${this.filePath}.${randomUUID()}.tmp`;
     try {
-      await writeFile(temporaryPath, JSON.stringify(workflows, null, 2), { encoding: "utf8", flag: "wx" });
+      await writeFile(temporaryPath, JSON.stringify(workflows, null, 2), { encoding: "utf8", flag: "wx", mode: 0o600 });
       await rename(temporaryPath, this.filePath);
     } catch (error) {
       // Never report success if durable replacement fails; best-effort cleanup
