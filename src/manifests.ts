@@ -79,7 +79,7 @@ function validateFields(value: unknown, fieldName: "inputs" | "outputs", manifes
       diagnostics.push({ code: "invalid-field", message: `${fieldName}[${index}] must be an object.`, manifestId, field: fieldName });
       continue;
     }
-    const id = field.id;
+    const id = field["id"];
     if (typeof id !== "string" || !ID_PATTERN.test(id)) {
       diagnostics.push({ code: "invalid-field-id", message: `${fieldName}[${index}].id must be a stable lowercase identifier.`, manifestId, field: fieldName });
     } else if (seen.has(id)) {
@@ -87,13 +87,13 @@ function validateFields(value: unknown, fieldName: "inputs" | "outputs", manifes
     } else {
       seen.add(id);
     }
-    if (typeof field.type !== "string" || !FIELD_TYPES.has(field.type as ManifestValueType)) {
+    if (typeof field["type"] !== "string" || !FIELD_TYPES.has(field["type"] as ManifestValueType)) {
       diagnostics.push({ code: "invalid-field-type", message: `${fieldName}[${index}].type is unsupported.`, manifestId, field: fieldName });
     }
-    if (typeof field.description !== "string" || field.description.trim().length === 0) {
+    if (typeof field["description"] !== "string" || field["description"].trim().length === 0) {
       diagnostics.push({ code: "missing-field-description", message: `${fieldName}[${index}].description must be non-empty.`, manifestId, field: fieldName });
     }
-    if (field.required !== undefined && typeof field.required !== "boolean") {
+    if (field["required"] !== undefined && typeof field["required"] !== "boolean") {
       diagnostics.push({ code: "invalid-required-flag", message: `${fieldName}[${index}].required must be a boolean when provided.`, manifestId, field: fieldName });
     }
   }
@@ -107,32 +107,32 @@ export function validateManifest(value: unknown): ManifestValidationResult {
     return { valid: false, diagnostics: [{ code: "invalid-manifest", message: "Manifest must be a JSON object." }] };
   }
 
-  const id = typeof value.id === "string" ? value.id : undefined;
-  if (value.schemaVersion !== MANIFEST_SCHEMA_VERSION) {
+  const id = typeof value["id"] === "string" ? value["id"] : undefined;
+  if (value["schemaVersion"] !== MANIFEST_SCHEMA_VERSION) {
     diagnostics.push({ code: "unsupported-schema-version", message: `schemaVersion must be ${MANIFEST_SCHEMA_VERSION}.`, manifestId: id });
   }
   if (id === undefined || !ID_PATTERN.test(id)) {
     diagnostics.push({ code: "invalid-id", message: "id must be a stable lowercase identifier (letters, digits, dot, underscore, hyphen).", manifestId: id });
   }
-  if (typeof value.version !== "string" || !SEMVER_PATTERN.test(value.version)) {
+  if (typeof value["version"] !== "string" || !SEMVER_PATTERN.test(value["version"])) {
     diagnostics.push({ code: "invalid-version", message: "version must be a semantic version (for example 1.2.3).", manifestId: id });
   }
-  if (typeof value.description !== "string" || value.description.trim().length === 0) {
+  if (typeof value["description"] !== "string" || value["description"].trim().length === 0) {
     diagnostics.push({ code: "missing-description", message: "description must be non-empty.", manifestId: id });
   }
-  if (typeof value.entrypoint !== "string" || !isSafeRelativeEntrypoint(value.entrypoint)) {
+  if (typeof value["entrypoint"] !== "string" || !isSafeRelativeEntrypoint(value["entrypoint"])) {
     diagnostics.push({ code: "unsafe-entrypoint", message: "entrypoint must be a normalized repository-relative path without traversal, absolute paths, or backslashes.", manifestId: id, field: "entrypoint" });
   }
-  if (!Array.isArray(value.requiredCapabilities)
-    || value.requiredCapabilities.some((item) => typeof item !== "string" || !ID_PATTERN.test(item))
-    || new Set(value.requiredCapabilities).size !== value.requiredCapabilities.length) {
+  if (!Array.isArray(value["requiredCapabilities"])
+    || value["requiredCapabilities"].some((item) => typeof item !== "string" || !ID_PATTERN.test(item))
+    || new Set(value["requiredCapabilities"]).size !== value["requiredCapabilities"].length) {
     diagnostics.push({ code: "invalid-capabilities", message: "requiredCapabilities must contain unique stable capability identifiers.", manifestId: id, field: "requiredCapabilities" });
   }
-  if (typeof value.trust !== "string" || !TRUST_LEVELS.has(value.trust as ManifestTrust)) {
+  if (typeof value["trust"] !== "string" || !TRUST_LEVELS.has(value["trust"] as ManifestTrust)) {
     diagnostics.push({ code: "invalid-trust", message: "trust must be first-party, reviewed-third-party, or untrusted.", manifestId: id, field: "trust" });
   }
-  validateFields(value.inputs, "inputs", id ?? "unknown", diagnostics);
-  validateFields(value.outputs, "outputs", id ?? "unknown", diagnostics);
+  validateFields(value["inputs"], "inputs", id ?? "unknown", diagnostics);
+  validateFields(value["outputs"], "outputs", id ?? "unknown", diagnostics);
 
   if (diagnostics.length > 0) return { valid: false, diagnostics };
   return { valid: true, manifest: value as unknown as SkillComponentManifest, diagnostics };
