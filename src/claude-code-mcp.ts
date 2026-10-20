@@ -216,7 +216,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
 
         const persisted = [];
         for (const check of report.checks) {
-          const stepId = `runner-verification-${runId}-${check.checkId}`;
+          const stepId = `runner-verification-${runId}-${check.checkId}-${randomUUID()}`;
           const started = await orchestrator.beginStep(runId, stepId);
           if (started.status !== "started") throw new WorkflowConflictError(`Could not persist verification step ${check.checkId}.`);
           const outcome = check.status === "passed" ? "passed"
@@ -228,7 +228,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             id: randomUUID(), runId, source: "runner_observed", kind, outcome, summary,
             observedAt: check.finishedAt, artifactIds: [],
           });
-          persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, stdout: check.stdout, stderr: check.stderr, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, reason: check.reason });
+          persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, observedStdoutBytes: check.observedStdoutBytes, observedStderrBytes: check.observedStderrBytes, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, reason: check.reason });
         }
         return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
       }
