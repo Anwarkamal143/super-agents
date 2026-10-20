@@ -30,7 +30,11 @@ function startClient(cwd, elicitationDecision = "accept") {
           id: message.id,
           result: elicitationDecision === "accept"
             ? { action: "accept", content: { decision: "approve" } }
-            : { action: "decline" },
+            : elicitationDecision === "malformed"
+              ? { action: "accept", content: {} }
+              : elicitationDecision === "cancel"
+                ? { action: "cancel" }
+                : { action: "decline" },
         }) + "\n");
       } else if (message.id !== undefined && waiting.has(String(message.id))) {
         waiting.get(String(message.id))(message);
