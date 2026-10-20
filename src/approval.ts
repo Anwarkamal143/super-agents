@@ -1,6 +1,7 @@
 import { createHash, randomUUID } from "node:crypto";
 import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { withFileLock } from "./file-lock.js";
 
 export const CONSEQUENT_ACTIONS = [
   "file.write",
@@ -62,10 +63,15 @@ export interface ApprovalLedgerState {
 export interface ApprovalStore {
   load(): Promise<ApprovalLedgerState>;
   save(state: ApprovalLedgerState): Promise<void>;
+  withExclusive?<T>(operation: () => Promise<T>): Promise<T>;
 }
 
 export class JsonFileApprovalStore implements ApprovalStore {
   constructor(private readonly filePath: string) {}
+
+  withExclusive<T>(operation: () => Promise<T>): Promise<T> {
+    return withFileLock(`${this.filePath}.lock`, operation);
+  }
 
   async load(): Promise<ApprovalLedgerState> {
     try {
@@ -122,7 +128,8 @@ export class ApprovalPolicy {
   }
 
   private exclusive<T>(operation: () => Promise<T>): Promise<T> {
-    const result = this.tail.then(operation, operation);
+    const run = () => this.store.withExclusive ? this.store.withExclusive(operation) : operation();
+    const result = this.tail.then(run, run);
     this.tail = result.then(() => undefined, () => undefined);
     return result;
   }
