@@ -5,3 +5,4 @@ export const MINIMUM_NODE_MAJOR = 22 as const;
 export * from "./domain.js";
 export * from "./workflow.js";
 export * from "./discovery.js";
+export * from "./orchestrator.js";
