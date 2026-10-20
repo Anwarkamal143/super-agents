@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { FACTORY_NAME, FACTORY_VERSION, MINIMUM_NODE_MAJOR } from "../src/index.ts";
+import { FACTORY_NAME, FACTORY_VERSION, MINIMUM_NODE_MAJOR } from "../dist/index.js";
 
 test("exports stable factory metadata", () => {
   assert.equal(FACTORY_NAME, "super-agents");
