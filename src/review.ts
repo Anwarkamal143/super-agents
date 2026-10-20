@@ -255,9 +255,12 @@ export async function reviewWithBoundedRepair(options: BoundedRepairOptions): Pr
     }
 
     const repaired = await options.repair({ review: current, attempt });
-    const verification = await options.verify(repaired);
+    const pinnedRepair = prepareReviewInput(repaired);
+    const verification = await options.verify(pinnedRepair);
     attempts = attempt;
-    if (verification.status !== "passed") {
+    const verificationMatchesRepair = verification.baseCommit.toLowerCase() === pinnedRepair.baseCommit &&
+      verification.headCommit.toLowerCase() === pinnedRepair.headCommit && verification.diff === pinnedRepair.diff;
+    if (verification.status !== "passed" || !verificationMatchesRepair) {
       const failedCycle: ReviewCycle = {
         fixedPoint: verification.headCommit,
         diffDigest: createHash("sha256").update(verification.diff, "utf8").digest("hex"),
@@ -274,11 +277,13 @@ export async function reviewWithBoundedRepair(options: BoundedRepairOptions): Pr
         repairAttempts: attempts,
         repairLimit: options.maxRepairAttempts,
         history,
-        reason: `Verification after repair ${attempt} was ${verification.status}; review cannot continue.`,
+        reason: !verificationMatchesRepair
+          ? `Verification evidence did not match the repaired diff fixed point after repair ${attempt}; review cannot continue.`
+          : `Verification after repair ${attempt} was ${verification.status}; review cannot continue.`,
       };
     }
 
-    input = repaired;
+    input = pinnedRepair;
     current = await reviewPinnedDiff(input, options.engine);
     const last = current.history[0];
     history.push({ ...last, verification: "passed" });
