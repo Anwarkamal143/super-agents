@@ -6,7 +6,7 @@ import { PassThrough } from "node:stream";
 import { mkdtemp, mkdir, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { runVerification, VerificationConfigError } from "../dist/index.js";
+import { runVerification, VerificationConfigError, VerificationPersistenceError } from "../dist/index.js";
 
 async function withRoot(run) {
   const root = await mkdtemp(path.join(os.tmpdir(), "super-agents-verification-"));
@@ -507,5 +507,51 @@ test("process error during shutdown preserves escalation and cleans stream liste
     assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
     assert.equal(spawnedChild.stdout.listenerCount("error"), 0);
     assert.equal(spawnedChild.stderr.listenerCount("error"), 0);
+  });
+});
+
+
+test("evidence persistence failure is typed, redacted, and prevents later checks", async () => {
+  await withRoot(async (root) => {
+    for (const failingCheckId of ["first", "second"]) {
+      const fake = fakeSpawn();
+      const authorizations = [];
+      const persisted = [];
+      const checks = [
+        { id: "first", kind: "test", executable: "node", args: ["first.js"] },
+        { id: "second", kind: "test", executable: "node", args: ["second.js"] },
+        { id: "third", kind: "test", executable: "node", args: ["third.js"] },
+      ];
+
+      await assert.rejects(
+        runVerification(config(root, fake.spawnProcess, {
+          checks,
+          authorize: async (_action, payload) => {
+            authorizations.push(payload.checkId);
+            return true;
+          },
+          onCheckComplete: async (result) => {
+            persisted.push(result.checkId);
+            if (result.checkId === failingCheckId) {
+              throw new Error("storage secret: private-token-123");
+            }
+          },
+        })),
+        (error) => {
+          assert.ok(error instanceof VerificationPersistenceError);
+          assert.equal(error.name, "VerificationPersistenceError");
+          assert.equal(error.checkId, failingCheckId);
+          assert.match(error.message, /Failed to persist verification evidence/);
+          assert.doesNotMatch(error.message, /private-token-123|storage secret/);
+          assert.equal("cause" in error, false);
+          return true;
+        },
+      );
+
+      const failedIndex = checks.findIndex((check) => check.id === failingCheckId);
+      assert.deepEqual(persisted, checks.slice(0, failedIndex + 1).map((check) => check.id));
+      assert.deepEqual(authorizations, checks.slice(0, failedIndex + 1).map((check) => check.id));
+      assert.equal(fake.calls.length, failedIndex + 1);
+    }
   });
 });
