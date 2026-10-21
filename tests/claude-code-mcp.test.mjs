@@ -27,6 +27,8 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
   const waiting = new Map();
   const protocolErrors = [];
   const responseCounts = new Map();
+  const receivedResponses = new Map();
+  const responseWaiters = new Map();
   const elicitationQueue = [];
   const elicitationWaiters = [];
   let id = 0;
@@ -64,6 +66,11 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
         if (waiting.has(key)) {
           waiting.get(key)(message);
           waiting.delete(key);
+        } else if (responseWaiters.has(key)) {
+          responseWaiters.get(key)(message);
+          responseWaiters.delete(key);
+        } else {
+          receivedResponses.set(key, message);
         }
       }
     }
@@ -93,6 +100,31 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
   const sendRawText = (raw, chunkSize = 32768) => {
     for (let offset = 0; offset < raw.length; offset += chunkSize) child.stdin.write(raw.slice(offset, offset + chunkSize));
     child.stdin.write("\n");
+  };
+  const sendRawBytes = (raw, chunkSize = 32768, delimiter = "\n") => {
+    const bytes = Buffer.from(raw, "utf8");
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      child.stdin.write(bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+    }
+    child.stdin.write(delimiter);
+  };
+  const waitForResponse = (requestId, timeoutMs = 3000) => {
+    const key = String(requestId);
+    if (receivedResponses.has(key)) {
+      const response = receivedResponses.get(key);
+      receivedResponses.delete(key);
+      return Promise.resolve(response);
+    }
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        responseWaiters.delete(key);
+        reject(new Error(`Timed out waiting for response id ${key}. stderr=${stderr}`));
+      }, timeoutMs);
+      responseWaiters.set(key, (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
+    });
   };
   const nextElicitation = () => {
     if (elicitationQueue.length) return Promise.resolve(elicitationQueue.shift());
@@ -132,7 +164,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
+  return { child, request, sendRaw, sendRawText, sendRawBytes, waitForResponse, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -358,6 +390,92 @@ test("MCP bridge bounds concurrent tool calls and releases capacity after they s
   assert.equal(recovered.run.id, created.run.id, "a later request should run after in-flight capacity is released");
 });
 
+test("MCP bridge accepts frames at the byte limit with LF and CRLF delimiters", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-frame-boundary-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+
+  const makeCreateFrame = (targetBytes, id, requestId) => {
+    const frame = {
+      jsonrpc: "2.0",
+      id,
+      method: "tools/call",
+      params: {
+        name: "factory_session_create",
+        arguments: { requestId },
+        padding: "",
+      },
+    };
+    const baseBytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
+    assert.ok(targetBytes >= baseBytes);
+    frame.params.padding = "x".repeat(targetBytes - baseBytes);
+    const serialized = JSON.stringify(frame);
+    assert.equal(Buffer.byteLength(serialized, "utf8"), targetBytes);
+    return serialized;
+  };
+
+  client.sendRawBytes(makeCreateFrame(1_048_576, "exact-lf", "exact-lf-frame"), 16_381, "\n");
+  const lfResponse = await client.waitForResponse("exact-lf");
+  assert.equal(lfResponse.error, undefined, JSON.stringify(lfResponse));
+
+  // The CRLF pair is framing, not payload: a maximum-sized JSON frame remains valid.
+  client.sendRawBytes(makeCreateFrame(1_048_576, "exact-crlf", "exact-crlf-frame"), 16_379, "\r\n");
+  const crlfResponse = await client.waitForResponse("exact-crlf");
+  assert.equal(crlfResponse.error, undefined, JSON.stringify(crlfResponse));
+
+  const state = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
+  assert.ok(state.runs.some((run) => run.requestId === "exact-lf-frame"));
+  assert.ok(state.runs.some((run) => run.requestId === "exact-crlf-frame"));
+});
+
+test("MCP bridge rejects a frame one byte over the limit without dispatch or payload echo", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-frame-over-limit-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+
+  const frame = {
+    jsonrpc: "2.0",
+    id: "one-byte-over",
+    method: "tools/call",
+    params: {
+      name: "factory_session_create",
+      arguments: { requestId: "must-not-be-created-over-limit" },
+      padding: "",
+    },
+  };
+  const baseBytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
+  frame.params.padding = "s".repeat(1_048_577 - baseBytes);
+  const serialized = JSON.stringify(frame);
+  assert.equal(Buffer.byteLength(serialized, "utf8"), 1_048_577);
+  client.sendRawBytes(serialized, 8191);
+
+  // A valid request after the rejected frame proves the parser recovered.
+  const barrier = await client.request("tools/list");
+  assert.ok(Array.isArray(barrier.result.tools));
+  const errors = client.getProtocolErrors();
+  assert.ok(errors.some((message) => /exceeds the 1048576-byte limit/.test(message.error.message)));
+  assert.ok(errors.every((message) => !JSON.stringify(message).includes("must-not-be-created-over-limit")));
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+});
+
 test("MCP bridge bounds oversized input frames and resumes at the next newline", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-oversized-frame-"));
   const client = startClient(cwd);
@@ -373,10 +491,10 @@ test("MCP bridge bounds oversized input frames and resumes at the next newline",
     params: {
       name: "factory_session_create",
       arguments: { requestId: "must-not-be-created" },
-      padding: "x".repeat(1_048_600),
+      padding: "界".repeat(400_000),
     },
   });
-  client.sendRawText(oversized, 16_384);
+  client.sendRawBytes(oversized, 16_381);
 
   // The oversized frame is discarded through its newline; a subsequent valid
   // request proves the parser recovers instead of poisoning the input stream.
