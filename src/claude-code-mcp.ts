@@ -220,7 +220,20 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         if (!((actionType === "file.write" && ["Write", "Edit", "MultiEdit", "NotebookEdit"].includes(toolName)) || (actionType === "command.execute" && toolName === "Bash"))) throw new TypeError("Action type does not match the native tool.");
         const payload = { toolName, toolInput };
         const digest = digestPayload(payload);
-        const response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
+        let response: { action: ElicitationAction; content?: JsonObject };
+        try {
+          response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\\n\\nExact tool input:\\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
+        } catch {
+          // Missing host support, timeout, or transport failure is a denial,
+          // not an approval-shaped success or an opaque tool-call error.
+          // If this audit write fails, propagate it and remain fail-closed.
+          const failureReason = "Human elicitation was unavailable or failed; no action was approved."; 
+          await approvals.recordDecision({
+            actionType, payload, outcome: "denied", decidedBy: "claude-code-elicitation-host",
+            rationale: failureReason, scopeId: runId,
+          });
+          return { approved: false, blocked: true, reason: failureReason };
+        }
         // Revalidate after the user prompt: the run may have been cancelled or
         // advanced while elicitation was pending. Never mint a stale approval.
         const latest = await orchestrator.getWorkflow(runId);
