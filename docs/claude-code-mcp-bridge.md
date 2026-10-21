@@ -112,6 +112,12 @@ Call `factory_verification_run` with the workflow ID and current revision. The b
 - The active model can submit misleading evidence. Persisted provenance distinguishes model assertions (`model_reported`), process observations (`runner_observed`), and review-engine results (`review_engine`). Provenance labels are not cryptographic attestations; only independently operated, trusted runner infrastructure can establish a stronger execution guarantee.
 - The hook cannot control tools or processes outside its configured native-tool matcher. Treat it as defense-in-depth, not a system-wide sandbox.
 
+## Persisted step validation
+
+The JSON workflow store validates step IDs, statuses, non-empty start timestamps, optional attempt counts, and optional completion fields before returning persisted state. When present, `finishedAt` and `summary` must be non-empty strings; `attempt` must be a positive safe integer. Steps marked `succeeded` or `failed` must include both completion fields. Running and interrupted steps may omit them because interruption recovery deliberately preserves an unfinished attempt for human reconciliation.
+
+Malformed step state is rejected rather than repaired or silently normalized. This is structural validation, not proof that a step actually ran or that a stored timestamp is truthful.
+
 ## Interactive smoke test required before production use
 
 Use the [interactive smoke-test report template](./claude-code-smoke-report-template.md) to capture version details, actual UI observations, evidence, and blocked/not-run steps. The template is intentionally blank until someone runs the test in a real interactive Claude Code session.
