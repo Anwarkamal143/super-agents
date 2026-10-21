@@ -1712,3 +1712,23 @@ test("MCP bridge cancels pending plan approval and exits promptly when stdin clo
   assert.equal(run.run.status, "cancelled");
 });
 
+test("MCP bridge exits cleanly when stdin reaches EOF without a request", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-clean-eof-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const exits = [];
+  client.child.on("close", (code, signal) => exits.push({ code, signal }));
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    closed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("MCP bridge did not exit after clean EOF.")), 1500)),
+  ]);
+  assert.equal(exits.length, 1, "end and close must not run shutdown more than once");
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+});
+
