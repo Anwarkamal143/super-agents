@@ -438,7 +438,8 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   // Frame input by bytes rather than readline's unbounded line accumulator.
   // Once a frame exceeds the cap, drop bytes until its newline and resume with
   // the next frame; never parse or echo the oversized payload.
-  let frame = Buffer.alloc(0);
+  const frame = Buffer.alloc(MAX_JSON_RPC_FRAME_BYTES);
+  let frameLength = 0;
   let droppingOversizedFrame = false;
   const inputClosed = new Promise<void>((resolve) => {
     input.once("end", resolve);
@@ -452,21 +453,22 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       const segmentEnd = newline === -1 ? bytes.length : newline;
       const segment = bytes.subarray(offset, segmentEnd);
       if (!droppingOversizedFrame) {
-        if (frame.length + segment.length > MAX_JSON_RPC_FRAME_BYTES) {
-          frame = Buffer.alloc(0);
+        if (frameLength + segment.length > MAX_JSON_RPC_FRAME_BYTES) {
+          frameLength = 0;
           droppingOversizedFrame = true;
           send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Input frame exceeds the 1048576-byte limit." } });
         } else if (segment.length > 0) {
-          frame = frame.length === 0 ? Buffer.from(segment) : Buffer.concat([frame, segment], frame.length + segment.length);
+          segment.copy(frame, frameLength);
+          frameLength += segment.length;
         }
       }
       if (newline === -1) break;
       if (!droppingOversizedFrame) {
-        let line = frame;
+        let line = frame.subarray(0, frameLength);
         if (line.length > 0 && line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
         dispatchLine(line.toString("utf8"));
       }
-      frame = Buffer.alloc(0);
+      frameLength = 0;
       droppingOversizedFrame = false;
       offset = newline + 1;
     }
