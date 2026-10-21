@@ -419,7 +419,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const requestId = message.id;
         if (requestId !== undefined) {
           if (inFlightToolCallIds.has(requestId)) {
-            send({ jsonrpc: "2.0", id: requestId, error: { code: -32600, message: "Duplicate in-flight request ID." } });
+            send({ jsonrpc: "2.0", id: null, error: { code: -32600, message: "Duplicate in-flight request ID; response ID is null because the supplied ID is already active." } });
             return;
           }
           if (inFlightToolCallIds.size >= MAX_IN_FLIGHT_TOOL_CALLS) {

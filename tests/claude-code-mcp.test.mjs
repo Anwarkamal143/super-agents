@@ -25,6 +25,8 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
   let stdout = "";
   let stderr = "";
   const waiting = new Map();
+  const protocolErrors = [];
+  const responseCounts = new Map();
   const elicitationQueue = [];
   const elicitationWaiters = [];
   let id = 0;
@@ -54,9 +56,15 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
                 ? { action: "cancel" }
                 : { action: "decline" },
         }) + "\n");
-      } else if (message.id !== undefined && waiting.has(String(message.id))) {
-        waiting.get(String(message.id))(message);
-        waiting.delete(String(message.id));
+      } else if (message.id === null && message.error) {
+        protocolErrors.push(message);
+      } else if (message.id !== undefined) {
+        const key = String(message.id);
+        responseCounts.set(key, (responseCounts.get(key) ?? 0) + 1);
+        if (waiting.has(key)) {
+          waiting.get(key)(message);
+          waiting.delete(key);
+        }
       }
     }
   });
@@ -106,7 +114,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length };
+  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -237,7 +245,7 @@ test("MCP bridge rejects unsupported protocol negotiation", async (t) => {
   assert.match(response.error.message, /supports only MCP protocol 2025-11-25/);
 });
 
-test("MCP bridge rejects duplicate in-flight tool request IDs without a second invocation", async (t) => {
+test("MCP bridge keeps duplicate-ID errors uncorrelated so the original request completes exactly once", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-duplicate-rpc-id-"));
   const client = startClient(cwd, "accept");
   t.after(async () => {
@@ -267,13 +275,19 @@ test("MCP bridge rejects duplicate in-flight tool request IDs without a second i
     jsonrpc: "2.0", id: original.requestId, method: "tools/call",
     params: { name: "factory_action_request_approval", arguments: args },
   });
-  const duplicateResponse = await original;
-  assert.equal(duplicateResponse.error?.code, -32600);
-  assert.match(duplicateResponse.error.message, /Duplicate in-flight/);
   client.respondToElicitation(prompt.id, "decline");
+
+  const originalResponse = await original;
+  assert.equal(originalResponse.id, original.requestId);
+  assert.equal(originalResponse.result?.isError, true, "the original operation should settle from its own decline, not from the duplicate");
+  assert.equal(client.getResponseCount(original.requestId), 1, "exactly one terminal response may use the original request ID");
+  const duplicateError = client.getProtocolErrors().find((message) => message.error?.code === -32600);
+  assert.ok(duplicateError, "the duplicate should receive an uncorrelated invalid-request error");
+  assert.equal(duplicateError.id, null, "the duplicate error must not steal the original request's correlation ID");
 
   await client.tool("factory_session_get", { runId: created.run.id });
   assert.equal(client.getQueuedElicitationCount(), 0, "duplicate request must not enqueue another human prompt");
+  assert.equal(client.getResponseCount(original.requestId), 1, "later requests must not cause a second response for the original ID");
 });
 
 test("MCP bridge bounds concurrent tool calls and releases capacity after they settle", async (t) => {
