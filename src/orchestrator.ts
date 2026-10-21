@@ -14,6 +14,7 @@ export interface WorkflowEvent {
   readonly kind?: "transition" | "step_started" | "step_finished" | "step_interrupted" | "step_reconciled";
   readonly stepId?: string;
   readonly stepStatus?: StepStatus;
+  readonly attempt?: number;
   readonly actor?: string;
   /** Digest only; free-form summaries/reasons are deliberately not copied into the audit trail. */
   readonly detailDigest?: string;
@@ -230,7 +231,7 @@ export class WorkflowOrchestrator {
         steps: { ...current.steps, [stepId]: step },
         events: [...current.events, {
           runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
-          at, kind: "step_started", stepId, stepStatus: "running",
+          at, kind: "step_started", stepId, stepStatus: "running", attempt: step.attempt,
         }],
       };
       await this.writeAll(next);
@@ -265,7 +266,7 @@ export class WorkflowOrchestrator {
         steps: { ...current.steps, [stepId]: step },
         events: [...current.events, {
           runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
-          at, kind: "step_finished", stepId, stepStatus: outcome,
+          at, kind: "step_finished", stepId, stepStatus: outcome, attempt: step.attempt,
           detailDigest: digestText(summary),
         }],
         evidence: evidence ? [...current.evidence, evidence] : current.evidence,
