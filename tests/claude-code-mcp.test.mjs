@@ -108,6 +108,25 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     }
     child.stdin.write(delimiter);
   };
+  const sendRawBytesSplitCrLf = async (raw, chunkSize = 32768) => {
+    const bytes = Buffer.from(raw, "utf8");
+    const write = async (chunk) => {
+      if (!child.stdin.write(chunk)) {
+        await new Promise((resolve, reject) => {
+          child.stdin.once("drain", resolve);
+          child.stdin.once("error", reject);
+        });
+      }
+    };
+    for (let offset = 0; offset < bytes.length; offset += chunkSize) {
+      await write(bytes.subarray(offset, Math.min(offset + chunkSize, bytes.length)));
+    }
+    // Yield between delimiter writes so the stream consumer can observe CR
+    // while LF is still pending; no timing sleep is used.
+    await write(Buffer.from("\r"));
+    await new Promise((resolve) => setImmediate(resolve));
+    await write(Buffer.from("\n"));
+  };
   const waitForResponse = (requestId, timeoutMs = 3000) => {
     const key = String(requestId);
     if (receivedResponses.has(key)) {
@@ -164,7 +183,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, sendRaw, sendRawText, sendRawBytes, waitForResponse, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
+  return { child, request, sendRaw, sendRawText, sendRawBytes, sendRawBytesSplitCrLf, waitForResponse, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -388,6 +407,81 @@ test("MCP bridge bounds concurrent tool calls and releases capacity after they s
   await Promise.all(calls);
   const recovered = await client.tool("factory_session_get", { runId: created.run.id });
   assert.equal(recovered.run.id, created.run.id, "a later request should run after in-flight capacity is released");
+});
+
+test("MCP bridge accepts an exact-limit frame when CRLF is written separately", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-split-crlf-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+
+  const frame = {
+    jsonrpc: "2.0",
+    id: "split-crlf-exact",
+    method: "tools/call",
+    params: {
+      name: "factory_session_create",
+      arguments: { requestId: "split-crlf-exact" },
+      padding: "",
+    },
+  };
+  const baseBytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
+  frame.params.padding = "x".repeat(1_048_576 - baseBytes);
+  const serialized = JSON.stringify(frame);
+  assert.equal(Buffer.byteLength(serialized, "utf8"), 1_048_576);
+
+  await client.sendRawBytesSplitCrLf(serialized, 8191);
+  const response = await client.waitForResponse("split-crlf-exact");
+  assert.equal(response.error, undefined, JSON.stringify(response));
+  const state = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
+  assert.equal(state.length, 1);
+  assert.equal(state[0].run.status, "created");
+});
+
+test("MCP bridge rejects an over-limit frame before a split CRLF can complete it", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-split-crlf-over-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+
+  const frame = {
+    jsonrpc: "2.0",
+    id: "split-crlf-over",
+    method: "tools/call",
+    params: {
+      name: "factory_session_create",
+      arguments: { requestId: "must-not-dispatch-split-crlf-over" },
+      padding: "",
+    },
+  };
+  const baseBytes = Buffer.byteLength(JSON.stringify(frame), "utf8");
+  frame.params.padding = "z".repeat(1_048_577 - baseBytes);
+  const serialized = JSON.stringify(frame);
+  assert.equal(Buffer.byteLength(serialized, "utf8"), 1_048_577);
+
+  await client.sendRawBytesSplitCrLf(serialized, 8191);
+  const recovery = await client.request("tools/list");
+  assert.ok(Array.isArray(recovery.result.tools));
+  const errors = client.getProtocolErrors();
+  assert.ok(errors.some((message) => /exceeds the 1048576-byte limit/.test(message.error.message)));
+  assert.ok(errors.every((message) => !JSON.stringify(message).includes("must-not-dispatch-split-crlf-over")));
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
 });
 
 test("MCP bridge accepts frames at the byte limit with LF and CRLF delimiters", async (t) => {
