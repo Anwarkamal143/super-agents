@@ -167,3 +167,8 @@ In a disposable target repository and an interactive Claude Code session:
 ## Restart and interrupted-step recovery
 
 The bridge exposes `factory_session_recover_interrupted` and `factory_step_reconcile` for operator-controlled recovery. Recovery first asks the host for explicit approval, rechecks the workflow revision and exact set of running steps, then marks those steps `interrupted`. It never retries commands automatically. Each interrupted step must be reconciled individually after inspecting whether its process or external effect completed. Confirming success/failure is a human assertion, not runner-observed evidence. Retrying requires a separate exact step/resolution/reason prompt and explicit human confirmation that replay is safe; stale state after elicitation is rejected. If host elicitation is unavailable, recovery/reconciliation is blocked.
+## PreToolUse hook input limit
+
+The compiled PreToolUse hook buffers at most **1,048,576 bytes (1 MiB)** of stdin before JSON parsing. The limit is measured in UTF-8 bytes, not JavaScript string length. Oversized input is denied with a bounded response before the hook reads approval or workflow state; it is never parsed as a partial request.
+
+As with the MCP frame reader, this bounds the hook’s own accumulation, not the size of an individual stream chunk that Node has already allocated. Keep normal host-level process and memory limits in place.
