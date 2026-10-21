@@ -540,7 +540,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   // Frame input by bytes rather than readline's unbounded line accumulator.
   // Once a frame exceeds the cap, drop bytes until its newline and resume with
   // the next frame; never parse or echo the oversized payload.
-  const frame = Buffer.alloc(MAX_JSON_RPC_FRAME_BYTES);
+  // Keep one extra byte so a CR at the end of a CRLF frame can be held
+  // until the following LF confirms that it belongs to the delimiter.
+  const frame = Buffer.alloc(MAX_JSON_RPC_FRAME_BYTES + 1);
   let frameLength = 0;
   let droppingOversizedFrame = false;
   const inputClosed = new Promise<void>((resolve) => {
@@ -559,7 +561,17 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       const segmentEnd = newline === -1 ? bytes.length : newline;
       const segment = bytes.subarray(offset, segmentEnd);
       if (!droppingOversizedFrame) {
-        if (frameLength + segment.length > MAX_JSON_RPC_FRAME_BYTES) {
+        const hasDelimiter = newline !== -1;
+        const hasTrailingCarriageReturn = segment.length > 0 && segment[segment.length - 1] === 0x0d;
+        const candidateLength = frameLength + segment.length;
+        const delimiterBytes = hasDelimiter && hasTrailingCarriageReturn ? 1 : 0;
+        const effectiveLength = candidateLength - delimiterBytes;
+        // If LF is split into the next chunk, temporarily allow a single
+        // trailing CR beyond the payload cap; reject it if another byte follows.
+        const pendingCrLf = !hasDelimiter && hasTrailingCarriageReturn &&
+          candidateLength === MAX_JSON_RPC_FRAME_BYTES + 1;
+        if (effectiveLength > MAX_JSON_RPC_FRAME_BYTES &&
+            !(pendingCrLf && candidateLength === MAX_JSON_RPC_FRAME_BYTES + 1)) {
           frameLength = 0;
           droppingOversizedFrame = true;
           send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Input frame exceeds the 1048576-byte limit." } });
