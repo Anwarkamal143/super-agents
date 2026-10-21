@@ -473,7 +473,7 @@ test("MCP bridge fails closed when elicitation is unavailable or malformed", asy
 
 test("MCP action approval persists a denial when the host does not advertise elicitation", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-action-no-elicitation-"));
-  const client = startClient(cwd);
+  let client = startClient(cwd);
   t.after(async () => {
     client.child.kill("SIGTERM");
     await rm(cwd, { recursive: true, force: true });
@@ -490,7 +490,12 @@ test("MCP action approval persists a denial when the host does not advertise eli
   });
   assert.equal(plan.approved, true);
 
-  // Model a host capability change before the consequential action request.
+  // Capability negotiation is connection-scoped. Restart with a new host
+  // session that does not advertise elicitation rather than re-initializing.
+  const previousClient = client;
+  previousClient.child.kill("SIGTERM");
+  await new Promise((resolve) => previousClient.child.once("close", resolve));
+  client = startClient(cwd);
   await client.request("initialize", {
     protocolVersion: "2025-11-25", capabilities: {},
     clientInfo: { name: "no-elicitation-host", version: "1.0.0" },
