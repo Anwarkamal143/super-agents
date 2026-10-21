@@ -69,6 +69,12 @@ The stdio bridge validates each parsed JSON-RPC envelope before dispatch. Reques
 
 Only `notifications/initialized` and `notifications/cancelled` are handled as notifications. A request-only method such as `tools/call` without an ID is ignored and never dispatched, so it cannot create a workflow or mutate persisted state without a correlatable request/response exchange. This is envelope validation for the bridge's minimal supported protocol, not a claim that the adapter implements every JSON-RPC or MCP extension.
 
+## Inbound frame size limit
+
+The stdio bridge accepts newline-delimited JSON-RPC frames up to **1,048,576 bytes (1 MiB)**, measured before UTF-8 decoding and excluding the newline delimiter. Input is copied into a fixed-size buffer; the server does not use an unbounded line accumulator. If a frame exceeds the cap, it is discarded through the next newline and a bounded `-32700` error is emitted without parsing or echoing the payload. Processing resumes with the next frame. CRLF delimiters are supported.
+
+This protects the bridge from oversized single-frame buffering and JSON parsing. It does not cap the size of an individual upstream stream chunk already delivered by Node, or replace host-level process/memory limits.
+
 ## MCP request validation
 
 The bridge validates raw `tools/call` arguments against the server's published input schema before dispatching a tool handler. This independently enforces required fields, value types, enum membership, string bounds, non-negative safe-integer revisions, and rejection of unexpected fields where the schema sets `additionalProperties: false`. Do not rely on a client or model honoring `tools/list` schemas: malformed arguments are rejected before workflow, approval, or evidence state is mutated.
