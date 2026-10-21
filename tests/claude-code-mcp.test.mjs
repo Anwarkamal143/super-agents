@@ -1482,7 +1482,7 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   const embedded = startEmbeddedClient(path.join(cwd, ".factory-state"), async (request) => {
     providerCalls += 1;
     assert.equal(request.runId, created.run.id);
-    assert.equal(request.workflowRevision, transitioned.run.revision);
+    assert.equal(request.workflowRevision, transitioned.revision);
     assert.equal(request.repositoryRoot, process.cwd());
     return {
       status: "passed",
@@ -1496,12 +1496,12 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   // Unknown model-supplied provenance fields must be rejected by the advertised schema.
   const spoof = await embedded.request("tools/call", {
     name: "factory_review_run",
-    arguments: { runId: created.run.id, expectedRevision: transitioned.run.revision, source: "review_engine", outcome: "passed" },
+    arguments: { runId: created.run.id, expectedRevision: transitioned.revision, source: "review_engine", outcome: "passed" },
   });
   assert.equal(spoof.result.isError, true);
   const review = await embedded.tool("factory_review_run", {
     runId: created.run.id,
-    expectedRevision: transitioned.run.revision,
+    expectedRevision: transitioned.revision,
   });
   assert.equal(providerCalls, 1);
   assert.equal(review.status, "passed");
@@ -1515,7 +1515,7 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   assert.equal(ready.automaticDelivery, false);
   assert.equal(transitioned.status, "reviewing");
   await assert.rejects(
-    embedded.tool("factory_review_run", { runId: created.run.id, expectedRevision: transitioned.run.revision }),
+    embedded.tool("factory_review_run", { runId: created.run.id, expectedRevision: transitioned.revision }),
     /cannot start safely/i,
   );
   await embedded.close();
