@@ -76,14 +76,14 @@ function validateReport(report) {
       continue;
     }
 
-    const observed = findField(sectionLines, /^- Observed:\s*(.*)$/);
-    if (!observed || isPlaceholder(observed.value)) {
-      errors.push(`${prefix} add a concrete observation after "- Observed:"; do not leave it blank or as a placeholder.`);
+    const observedFields = findFields(sectionLines, /^- Observed:\\s*(.*)$/);
+    if (observedFields.length !== 1 || isPlaceholder(observedFields[0]?.value)) {
+      errors.push(`${prefix} provide exactly one concrete observation after "- Observed:"; do not leave it blank or as a placeholder.`);
     }
 
-    const evidence = findField(sectionLines, /^- Evidence(?:\s+\([^)]*\))?:\s*(.*)$/);
-    if (!evidence || isPlaceholder(evidence.value)) {
-      errors.push(`${prefix} add an evidence link/reference after "- Evidence:"; do not leave it blank or as a placeholder.`);
+    const evidenceFields = findFields(sectionLines, /^- Evidence(?:\\s+\\([^)]*\\))?:\\s*(.*)$/);
+    if (evidenceFields.length !== 1 || isPlaceholder(evidenceFields[0]?.value)) {
+      errors.push(`${prefix} provide exactly one evidence link/reference after "- Evidence:"; do not leave it blank or as a placeholder.`);
     }
   }
 
@@ -115,12 +115,11 @@ function validateReport(report) {
   return errors;
 }
 
-function findField(lines, pattern) {
-  for (const line of lines) {
+function findFields(lines, pattern) {
+  return lines.flatMap((line) => {
     const match = pattern.exec(line);
-    if (match) return { value: match[1].trim() };
-  }
-  return undefined;
+    return match ? [{ value: match[1].trim() }] : [];
+  });
 }
 
 function isPlaceholder(value) {
