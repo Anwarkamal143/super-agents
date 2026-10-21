@@ -51,6 +51,12 @@ Use the supported Claude Code local/project settings mechanism for your environm
 
 The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `Bash` unless it finds an active approval for the exact canonical `{ toolName, toolInput }` payload. The approval is consumed once. A changed argument or replay is denied. Other tool integrations and external processes are outside this hook's boundary; keep Claude Code's normal permission controls enabled.
 
+## Persisted-state validation and corruption recovery
+
+The workflow store validates each persisted run's required identifiers, recognized status, revision and timestamps, plus the event, step and evidence collection shapes, before returning records to the bridge or native-tool hook. Duplicate run IDs and malformed records fail the read; the hook therefore denies governed actions instead of trusting a parseable but incomplete `run.status`. Historical evidence records may omit the newer `source` provenance field and remain readable for compatibility.
+
+Do not delete, reset, or hand-edit a malformed state file as an automatic recovery step. Preserve a copy, inspect it, and restore or repair it deliberately before retrying. These checks detect structural corruption, not malicious edits by a local actor who can alter both workflow and approval files; the JSON store is not tamper-evident.
+
 ## Operator-configured verification runner
 
 The bridge can execute a verification profile through the existing bounded runner. Configure `FACTORY_VERIFICATION_PROFILE` in the MCP server process environment with operator-reviewed JSON. The profile is **not** accepted as an MCP tool argument and is never discovered from repository files.
