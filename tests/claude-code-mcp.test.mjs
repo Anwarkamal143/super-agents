@@ -972,7 +972,7 @@ test("cancelling a pending verification approval prevents the process from start
   const item = response.result?.content?.find((entry) => entry.type === "text");
   const report = JSON.parse(item.text);
   assert.equal(report.status, "incomplete");
-  assert.equal(report.checks[0].status, "blocked");
+  assert.equal(report.checks[0].status, "cancelled");
   await assert.rejects(import("node:fs/promises").then(({ stat }) => stat(path.join(cwd, "cancelled-check-ran.txt"))), { code: "ENOENT" });
 });
 

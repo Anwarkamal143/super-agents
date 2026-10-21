@@ -173,3 +173,108 @@ test("repository-contained nested working directory is accepted", async () => {
     assert.equal(report.status, "passed");
   });
 });
+
+
+test("authorization denial stops the run and never requests approval for later checks", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn();
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      checks: [
+        { id: "denied", kind: "test", executable: "node", args: ["first.js"] },
+        { id: "must-not-prompt", kind: "test", executable: "node", args: ["second.js"] },
+        { id: "also-not-run", kind: "typecheck", executable: "node", args: ["third.js"] },
+      ],
+      authorize: async (_action, payload) => { authorizations.push(payload.checkId); return false; },
+    }));
+    assert.equal(report.status, "incomplete");
+    assert.deepEqual(authorizations, ["denied"]);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(report.checks.map((check) => check.status), ["blocked", "skipped", "skipped"]);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+    assert.match(report.checks[2].reason, /earlier check stopped/);
+  });
+});
+
+test("failed check stops later approvals and preserves one result per configured check", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn({ code: 2, stderr: "first check failed" });
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      checks: [
+        { id: "failure", kind: "test", executable: "node", args: ["first.js"] },
+        { id: "must-not-prompt", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => { authorizations.push(payload.checkId); return true; },
+    }));
+    assert.equal(report.status, "failed");
+    assert.deepEqual(authorizations, ["failure"]);
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(report.checks.map((check) => check.status), ["failed", "skipped"]);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
+
+test("cancellation while authorization is pending prevents spawn and later approval prompts", async () => {
+  await withRoot(async (root) => {
+    const controller = new AbortController();
+    const fake = fakeSpawn();
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      signal: controller.signal,
+      checks: [
+        { id: "cancel-during-prompt", kind: "test", executable: "node", args: ["first.js"] },
+        { id: "must-not-prompt", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => {
+        authorizations.push(payload.checkId);
+        controller.abort();
+        return true;
+      },
+    }));
+    assert.equal(report.status, "incomplete");
+    assert.deepEqual(authorizations, ["cancel-during-prompt"]);
+    assert.equal(fake.calls.length, 0);
+    assert.deepEqual(report.checks.map((check) => check.status), ["cancelled", "skipped"]);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
+
+test("successful checks continue, while an explicitly skipped check does not stop the run", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn();
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      checks: [
+        { id: "first", kind: "test", executable: "node", args: ["first.js"] },
+        { id: "configured-skip", kind: "test", executable: "node", args: [], skip: true },
+        { id: "last", kind: "typecheck", executable: "node", args: ["last.js"] },
+      ],
+      authorize: async (_action, payload) => { authorizations.push(payload.checkId); return true; },
+    }));
+    assert.equal(report.status, "incomplete");
+    assert.deepEqual(authorizations, ["first", "last"]);
+    assert.equal(fake.calls.length, 2);
+    assert.deepEqual(report.checks.map((check) => check.status), ["passed", "skipped", "passed"]);
+  });
+});
+
+
+test("timed-out check stops later approvals and leaves later checks explicitly skipped", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn({ neverClose: true });
+    const authorizations = [];
+    const report = await runVerification(config(root, fake.spawnProcess, {
+      checks: [
+        { id: "timeout", kind: "test", executable: "node", args: ["hang.js"], timeoutMs: 10 },
+        { id: "must-not-prompt", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => { authorizations.push(payload.checkId); return true; },
+    }));
+    assert.equal(report.status, "failed");
+    assert.deepEqual(authorizations, ["timeout"]);
+    assert.equal(fake.calls.length, 1);
+    assert.deepEqual(report.checks.map((check) => check.status), ["timed_out", "skipped"]);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
