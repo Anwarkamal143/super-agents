@@ -62,7 +62,7 @@ export class JsonFileWorkflowStore implements WorkflowStore {
       const raw = await readFile(this.filePath, "utf8");
       const parsed: unknown = JSON.parse(raw);
       if (!Array.isArray(parsed)) throw new TypeError("Workflow store must contain a JSON array.");
-      return parsed as PersistedWorkflow[];
+      return validatePersistedWorkflows(parsed);
     } catch (error) {
       if (isNodeError(error) && error.code === "ENOENT") return [];
       throw error;
@@ -331,6 +331,74 @@ export class WorkflowOrchestrator {
     });
   }
 
+}
+
+const WORKFLOW_STATUSES = new Set<WorkflowStatus>([
+  "created", "ready", "running", "awaiting_approval", "verifying", "reviewing",
+  "completed", "failed", "cancelled",
+]);
+
+/**
+ * Validate persisted records before callers use their status for authorization.
+ * Evidence provenance remains optional for compatibility with records written
+ * before the source field was introduced.
+ */
+function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
+  const seenRunIds = new Set<string>();
+  for (const [index, candidate] of value.entries()) {
+    const label = `Workflow store record at index ${index}`;
+    if (!isRecord(candidate)) throw new TypeError(`${label} must be an object.`);
+    const run = candidate["run"];
+    if (!isRecord(run)) throw new TypeError(`${label}.run must be an object.`);
+    if (!isNonEmptyString(run["id"]) || !isNonEmptyString(run["requestId"])) {
+      throw new TypeError(`${label}.run must include non-empty id and requestId fields.`);
+    }
+    if (!isWorkflowStatus(run["status"])) {
+      throw new TypeError(`${label}.run.status is not a recognized workflow status.`);
+    }
+    if (!Number.isSafeInteger(run["revision"]) || (run["revision"] as number) < 0) {
+      throw new TypeError(`${label}.run.revision must be a non-negative safe integer.`);
+    }
+    if (!isNonEmptyString(run["createdAt"]) || !isNonEmptyString(run["updatedAt"])) {
+      throw new TypeError(`${label}.run must include non-empty createdAt and updatedAt timestamps.`);
+    }
+    const runId = run["id"];
+    if (seenRunIds.has(runId)) throw new TypeError(`Workflow store contains duplicate run id: ${runId}`);
+    seenRunIds.add(runId);
+    const events = candidate["events"];
+    if (!Array.isArray(events) || !events.every(isRecord)) {
+      throw new TypeError(`${label}.events must be an array of objects.`);
+    }
+    const steps = candidate["steps"];
+    if (!isRecord(steps)) {
+      throw new TypeError(`${label}.steps must be an object keyed by step id.`);
+    }
+    for (const [stepId, step] of Object.entries(steps)) {
+      if (!isRecord(step) || step["id"] !== stepId || !isNonEmptyString(step["id"]) ||
+          !isNonEmptyString(step["startedAt"]) ||
+          !["running", "succeeded", "failed", "interrupted"].includes(String(step["status"])) ||
+          (step["attempt"] !== undefined && (!Number.isSafeInteger(step["attempt"]) || (step["attempt"] as number) < 1))) {
+        throw new TypeError(`${label}.steps[${JSON.stringify(stepId)}] has an invalid structure.`);
+      }
+    }
+    const evidence = candidate["evidence"];
+    if (!Array.isArray(evidence) || !evidence.every(isRecord)) {
+      throw new TypeError(`${label}.evidence must be an array of objects.`);
+    }
+  }
+  return value as PersistedWorkflow[];
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isWorkflowStatus(value: unknown): value is WorkflowStatus {
+  return typeof value === "string" && WORKFLOW_STATUSES.has(value as WorkflowStatus);
 }
 
 function digestText(value: string): string {

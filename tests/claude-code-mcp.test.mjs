@@ -1192,3 +1192,49 @@ test("MCP bridge blocks interrupted-step retry when host reconciliation is decli
   assert.equal(final.steps["uncertain-step"].status, "interrupted");
   assert.equal(final.steps["uncertain-step"].attempt, 1);
 });
+
+
+test("PreToolUse hook denies malformed persisted workflow state without consuming approval", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-malformed-workflow-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "malformed-workflow-state" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve a harmless fixture write for this test.",
+  });
+  assert.equal(plan.approved, true);
+  const toolInput = { file_path: "/tmp/approved-after-recovery.txt", content: "approved" };
+  const approval = await client.tool("factory_action_request_approval", {
+    runId: created.run.id,
+    actionType: "file.write",
+    toolName: "Write",
+    toolInput,
+    reason: "Test that malformed workflow state cannot authorize a native action.",
+  });
+  assert.equal(approval.approved, true);
+
+  const statePath = path.join(cwd, ".factory-state", "workflows.json");
+  const validState = await readFile(statePath, "utf8");
+  const malformedState = JSON.parse(validState);
+  const record = malformedState.find((item) => item.run.id === created.run.id);
+  record.run = { id: created.run.id, status: "running" };
+  await writeFile(statePath, JSON.stringify(malformedState, null, 2), { mode: 0o600 });
+
+  const denied = await runHook(cwd, "Write", toolInput);
+  assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(denied.hookSpecificOutput.permissionDecisionReason, /workflow store|persisted workflow/i);
+
+  await writeFile(statePath, validState, { mode: 0o600 });
+  const allowedAfterRestore = await runHook(cwd, "Write", toolInput);
+  assert.deepEqual(allowedAfterRestore, {});
+});
