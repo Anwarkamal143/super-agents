@@ -159,7 +159,7 @@ test("rejects persisted audit events that reference a different run", async () =
     const corrupted = structuredClone(workflows);
     corrupted[0].events[0].runId = "another-run";
     await writeFile(store.filePath, JSON.stringify(corrupted));
-    await assert.rejects(store.load(), /events\\[0\\] has an invalid structure/);
+    await assert.rejects(store.load(), /events\[0\] has an invalid structure/);
   });
 });
 
@@ -180,7 +180,7 @@ test("rejects malformed evidence fields and unknown provenance", async () => {
       source: "trusted_runner",
     });
     await writeFile(store.filePath, JSON.stringify(corrupted));
-    await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+    await assert.rejects(store.load(), /evidence\[0\] has an invalid structure/);
   });
 });
 
