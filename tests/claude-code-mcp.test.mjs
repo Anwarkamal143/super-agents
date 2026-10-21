@@ -5,6 +5,8 @@ import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { PassThrough } from "node:stream";
+import { runFactoryMcpServer } from "../dist/claude-code-mcp.js";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const serverEntry = path.join(root, "dist", "claude-code-mcp.js");
@@ -184,6 +186,66 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     return JSON.parse(item.text);
   };
   return { child, request, sendRaw, sendRawText, sendRawBytes, sendRawBytesSplitCrLf, waitForResponse, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length, getProtocolErrors: () => [...protocolErrors], getResponseCount: (requestId) => responseCounts.get(String(requestId)) ?? 0 };
+}
+
+function startEmbeddedClient(stateDirectory, reviewProvider) {
+  const input = new PassThrough();
+  const output = new PassThrough();
+  const pending = new Map();
+  let buffered = "";
+  let id = 0;
+  const server = runFactoryMcpServer({ stateDirectory, input, output, reviewProvider });
+  output.on("data", (chunk) => {
+    buffered += chunk.toString();
+    const lines = buffered.split("\n");
+    buffered = lines.pop() ?? "";
+    for (const line of lines) {
+      if (!line.trim()) continue;
+      const message = JSON.parse(line);
+      if (message.id !== undefined && pending.has(String(message.id))) {
+        const resolve = pending.get(String(message.id));
+        pending.delete(String(message.id));
+        resolve(message);
+      }
+    }
+  });
+  const request = (method, params = {}) => {
+    const requestId = ++id;
+    return new Promise((resolve, reject) => {
+      const timer = setTimeout(() => {
+        pending.delete(String(requestId));
+        reject(new Error(`Embedded MCP request timed out: ${method}`));
+      }, 3000);
+      timer.unref();
+      pending.set(String(requestId), (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      });
+      input.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }) + "\n");
+    });
+  };
+  const tool = async (name, args) => {
+    const response = await request("tools/call", { name, arguments: args });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    const text = response.result?.content?.find((entry) => entry.type === "text")?.text;
+    assert.ok(text, JSON.stringify(response));
+    if (response.result?.isError) throw new Error(text);
+    return JSON.parse(text);
+  };
+  const initialize = async () => {
+    const response = await request("initialize", {
+      protocolVersion: "2025-11-25",
+      capabilities: { elicitation: { form: {} } },
+      clientInfo: { name: "embedded-review-host", version: "1.0.0" },
+    });
+    assert.equal(response.error, undefined, JSON.stringify(response.error));
+    input.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
+  };
+  const close = async () => {
+    input.end();
+    await server;
+  };
+  return { initialize, request, tool, close };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -1406,32 +1468,137 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   assert.equal(delivery.reviewEngineEvidencePassed, false);
   assert.equal(delivery.readyForHumanDelivery, false, "runner success alone is not delivery readiness");
 
-  // Exercise the positive readiness path with persisted review-engine provenance.
+  // Exercise the real public review tool through a configured host provider;
+  // no test mutates the workflow JSON to manufacture trusted evidence.
   const transitioned = await client.tool("factory_phase_transition", {
     runId: created.run.id,
     expectedRevision: session.run.revision,
     to: "reviewing",
   });
-  const statePath = path.join(cwd, ".factory-state", "workflows.json");
-  const persisted = JSON.parse(await readFile(statePath, "utf8"));
-  const stored = persisted.find((item) => item.run.id === created.run.id);
-  stored.evidence.push({
-    id: "review-engine-pass",
-    runId: created.run.id,
-    source: "review_engine",
-    kind: "review",
-    outcome: "passed",
-    summary: "Independent review completed without findings.",
-    observedAt: new Date().toISOString(),
-    artifactIds: [],
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.kill("SIGTERM");
+  await closed;
+  let providerCalls = 0;
+  const embedded = startEmbeddedClient(path.join(cwd, ".factory-state"), async (request) => {
+    providerCalls += 1;
+    assert.equal(request.runId, created.run.id);
+    assert.equal(request.workflowRevision, transitioned.revision);
+    assert.equal(request.repositoryRoot, process.cwd());
+    return {
+      status: "passed",
+      baseCommit: "a".repeat(40),
+      headCommit: "b".repeat(40),
+      diff: "diff --git a/file b/file\n+reviewed",
+      summary: "Independent standards and specification review passed.",
+    };
   });
-  await writeFile(statePath, JSON.stringify(persisted, null, 2), { mode: 0o600 });
-  const ready = await client.tool("factory_delivery_status", { runId: created.run.id });
+  await embedded.initialize();
+  // Unknown model-supplied provenance fields must be rejected by the advertised schema.
+  const spoof = await embedded.request("tools/call", {
+    name: "factory_review_run",
+    arguments: { runId: created.run.id, expectedRevision: transitioned.revision, source: "review_engine", outcome: "passed" },
+  });
+  assert.equal(spoof.result.isError, true);
+  const review = await embedded.tool("factory_review_run", {
+    runId: created.run.id,
+    expectedRevision: transitioned.revision,
+  });
+  assert.equal(providerCalls, 1);
+  assert.equal(review.status, "passed");
+  assert.equal(review.evidenceSource, "review_engine");
+  assert.match(review.diffDigest, /^[a-f0-9]{64}$/);
+  const ready = await embedded.tool("factory_delivery_status", { runId: created.run.id });
   assert.equal(ready.run.status, "reviewing");
+  assert.equal(ready.reviewEngineEvidenceCount, 1);
   assert.equal(ready.reviewEngineEvidencePassed, true);
   assert.equal(ready.readyForHumanDelivery, true);
   assert.equal(ready.automaticDelivery, false);
   assert.equal(transitioned.status, "reviewing");
+  await assert.rejects(
+    embedded.tool("factory_review_run", { runId: created.run.id, expectedRevision: transitioned.revision }),
+    /cannot start safely/i,
+  );
+  await embedded.close();
+});
+
+test("MCP review fails closed when provider is unavailable or returns malformed output", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-review-failures-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "review-prerequisite",
+      kind: "test",
+      executable: "node",
+      args: ["-e", "process.stdout.write('verified')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "review-failure-host", version: "1.0.0" },
+  });
+  const prepareReviewingRun = async (requestId) => {
+    const created = await client.tool("factory_session_create", { requestId });
+    const plan = await client.tool("factory_plan_request_approval", {
+      runId: created.run.id,
+      expectedRevision: 0,
+      plan: "Prepare a run to exercise the review failure path.",
+    });
+    const verification = await client.tool("factory_verification_run", {
+      runId: created.run.id,
+      expectedRevision: plan.run.revision,
+    });
+    assert.equal(verification.status, "passed");
+    const session = await client.tool("factory_session_get", { runId: created.run.id });
+    const reviewing = await client.tool("factory_phase_transition", {
+      runId: created.run.id,
+      expectedRevision: session.run.revision,
+      to: "reviewing",
+    });
+    return { runId: created.run.id, revision: reviewing.revision };
+  };
+  const unavailableRun = await prepareReviewingRun("review-provider-unavailable");
+  const malformedRun = await prepareReviewingRun("review-provider-malformed");
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.kill("SIGTERM");
+  await closed;
+
+  const unavailable = startEmbeddedClient(path.join(cwd, ".factory-state"));
+  await unavailable.initialize();
+  await assert.rejects(
+    unavailable.tool("factory_review_run", { runId: unavailableRun.runId, expectedRevision: unavailableRun.revision }),
+    /provider is not configured/i,
+  );
+  const unavailableState = await unavailable.tool("factory_session_get", { runId: unavailableRun.runId });
+  assert.equal(unavailableState.steps[`review-run-${unavailableRun.runId}`].status, "failed");
+  await unavailable.close();
+
+  const malformed = startEmbeddedClient(path.join(cwd, ".factory-state"), async () => ({
+    status: "passed",
+    baseCommit: "a".repeat(40),
+    headCommit: "a".repeat(40),
+    diff: "same commit is not a valid pinned review",
+    summary: "This result must be rejected.",
+  }));
+  await malformed.initialize();
+  await assert.rejects(
+    malformed.tool("factory_review_run", { runId: malformedRun.runId, expectedRevision: malformedRun.revision }),
+    /malformed or unpinned/i,
+  );
+  const malformedState = await malformed.tool("factory_session_get", { runId: malformedRun.runId });
+  assert.equal(malformedState.steps[`review-run-${malformedRun.runId}`].status, "failed");
+  assert.equal(malformedState.evidence.some((item) => item.source === "review_engine"), false);
+  const delivery = await malformed.tool("factory_delivery_status", { runId: malformedRun.runId });
+  assert.equal(delivery.readyForHumanDelivery, false);
+  await malformed.close();
 });
 
 test("MCP verification rejects overlapping verification attempts before spawning a second process", async (t) => {

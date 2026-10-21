@@ -210,3 +210,12 @@ Each configured check is persisted before the runner advances to the next check.
 - No model-reported evidence claims failure.
 
 Model-reported evidence is displayed separately and can never substitute for runner-observed verification or review-engine evidence. Readiness only means the persisted gates are satisfied and a human may review delivery; it does not authenticate the review engine, prove local state is tamper-proof, or authorize any automatic PR creation, merge, deployment, or publishing. The local JSON store remains a single-host coordination mechanism, not a distributed transaction or cryptographic attestation.
+
+
+## Trusted review provider integration
+
+The MCP bridge can be embedded by a host application with a `reviewProvider` callback in `runFactoryMcpServer({ reviewProvider })`. The callback is optional; when omitted, a review request is recorded as failed and delivery readiness remains blocked. The standalone CLI does not invent a review provider.
+
+The model-facing `factory_review_run` tool accepts only a workflow ID and expected revision. It is available only in the `reviewing` phase, creates a stable `review-run-<runId>` step, and permits at most one attempt per workflow. The configured host callback receives the run ID, workflow revision, repository root, and cancellation signal. It must obtain the actual repository diff and return its status, full base/head commit IDs, the exact reviewed diff, and a bounded summary. The bridge rejects malformed commit IDs, identical base/head, empty or over-5-MiB diffs, and empty or overlong summaries. It computes SHA-256 over the returned diff and persists only the digest and summary—not the raw diff—as `review_engine` evidence. Failed, blocked, malformed, unavailable, or interrupted reviews never satisfy delivery readiness; the same run is not silently replayed.
+
+Only host code the operator intentionally configures should be wired as `reviewProvider`. Do not pass model-authored review text through this callback or load a provider from an untrusted repository. A callback is a trust boundary, not a sandbox: its output is not cryptographic attestation, the bridge does not independently authenticate a reviewer, and local JSON persistence is not tamper-proof or multi-host transactional storage. The provider must pin its own repository snapshot and ensure the supplied diff corresponds to its declared commits.
