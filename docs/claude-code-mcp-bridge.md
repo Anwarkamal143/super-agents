@@ -85,7 +85,9 @@ This bounds concurrent tool-handler work and pending elicitation pressure, but i
 
 The bridge validates raw `tools/call` arguments against the server's published input schema before dispatching a tool handler. This independently enforces required fields, value types, enum membership, string bounds, non-negative safe-integer revisions, and rejection of unexpected fields where the schema sets `additionalProperties: false`. Do not rely on a client or model honoring `tools/list` schemas: malformed arguments are rejected before workflow, approval, or evidence state is mutated.
 
-This is request-shape validation, not proof that model-reported evidence is true or that the local host identity is authenticated. Keep the PreToolUse gate and normal Claude Code permissions enabled.
+For `factory_evidence_submit`, the accepted input contract intentionally has no `source`, `provenance`, or caller-supplied evidence object: the handler constructs the persisted record with `source: "model_reported"`. Attempts to add a runner/review provenance label or smuggle a nested evidence object are rejected before dispatch, and therefore cannot append evidence or change readiness counts. The only MCP path that emits `runner_observed` is `factory_verification_run`, after the configured runner reports a completed check. Keep regression tests for direct and nested spoof attempts.
+
+This is request-shape validation, not proof that model-reported evidence is true or that the local host identity is authenticated. A locally privileged actor who can modify workflow JSON can still rewrite provenance labels; this store does not provide tamper evidence or cryptographic attestation. Keep the PreToolUse gate and normal Claude Code permissions enabled.
 
 ## Approval-ledger validation
 
