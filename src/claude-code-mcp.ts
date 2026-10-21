@@ -508,6 +508,10 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             repositoryRoot: cwd,
             signal,
           });
+          const latest = await orchestrator.getWorkflow(runId);
+          if (!latest || latest.run.revision !== expectedRevision || latest.run.status !== "reviewing") {
+            throw new WorkflowConflictError("Workflow changed while the review provider was running; its result was discarded.");
+          }
           if (!result || typeof result !== "object" ||
               !["passed", "changes_requested", "blocked"].includes(result.status) ||
               typeof result.baseCommit !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(result.baseCommit) ||
