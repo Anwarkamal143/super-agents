@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
-import { runVerification } from "../dist/verification.js";
+import { runVerification, VerificationPersistenceError } from "../dist/verification.js";
 
 async function withRoot(run) {
   const root = await mkdtemp(path.join(os.tmpdir(), "verification-callback-"));
@@ -76,7 +76,13 @@ test("persistence rejection prevents later authorization and spawning", async ()
         persisted.push(result.checkId);
         if (result.checkId === "first") throw new Error("storage unavailable");
       },
-    })), /storage unavailable/);
+    })), (error) => {
+      assert.ok(error instanceof VerificationPersistenceError);
+      assert.equal(error.checkId, "first");
+      assert.match(error.message, /Failed to persist verification evidence/);
+      assert.doesNotMatch(error.message, /storage unavailable/);
+      return true;
+    });
     assert.deepEqual(authorized, ["first"]);
     assert.deepEqual(persisted, ["first"]);
     assert.equal(fake.calls.length, 1);

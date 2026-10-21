@@ -83,6 +83,20 @@ export class VerificationConfigError extends Error {
   }
 }
 
+/**
+ * Raised when a completed check's evidence cannot be persisted by onCheckComplete.
+ * The callback's error is intentionally not retained because it may contain secrets.
+ */
+export class VerificationPersistenceError extends Error {
+  readonly checkId: string;
+
+  constructor(checkId: string) {
+    super(`Failed to persist verification evidence for check "${checkId}".`);
+    this.name = "VerificationPersistenceError";
+    this.checkId = checkId;
+  }
+}
+
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot"] as const;
@@ -100,7 +114,14 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
   const spawnProcess = config.spawnProcess ?? spawn;
   const recordResult = async (result: VerificationEvidenceRecord): Promise<void> => {
     results.push(result);
-    await config.onCheckComplete?.(result);
+    try {
+      await config.onCheckComplete?.(result);
+    } catch {
+      // Do not expose arbitrary persistence callback errors: adapters may include
+      // file paths, serialized evidence, or secret-bearing storage diagnostics.
+      // Rejecting here also prevents the loop from authorizing another check.
+      throw new VerificationPersistenceError(result.checkId);
+    }
   };
   const appendNotRun = async (startIndex: number): Promise<void> => {
     for (const check of config.checks.slice(startIndex)) {
