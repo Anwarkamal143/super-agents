@@ -289,6 +289,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         try {
           const parsed: unknown = JSON.parse(rawProfile);
           const value = requireObject(parsed, "FACTORY_VERIFICATION_PROFILE");
+          if (Object.keys(value).some((key) => key !== "checks" && key !== "allowedExecutables")) {
+            throw new TypeError("profile contains unsupported properties.");
+          }
           if (!Array.isArray(value["checks"]) || value["checks"].length === 0 || value["checks"].length > 50) throw new TypeError("checks must contain between 1 and 50 entries.");
           const allowedExecutables = requireObject(value["allowedExecutables"], "allowedExecutables") as unknown as Record<string, string>;
           if (Object.values(allowedExecutables).some((executable) => typeof executable !== "string" || !path.isAbsolute(executable))) {
