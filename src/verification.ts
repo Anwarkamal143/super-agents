@@ -492,6 +492,10 @@ function emptyEvidence(
 }
 
 
-function safeError(error: unknown, fallback: string): string {
-  return error instanceof Error ? error.message : fallback;
+function safeError(_error: unknown, fallback: string): string {
+  // Child-process and authorization errors can embed private paths, command
+  // arguments, or secret-bearing runtime diagnostics. Evidence exposes only
+  // stable operator-safe reasons; detailed diagnostics belong in a protected
+  // host log, not the persisted verification report.
+  return fallback;
 }
