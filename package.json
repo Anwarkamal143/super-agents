@@ -35,7 +35,8 @@
     "check": "npm run typecheck && npm test",
     "prepack": "npm run build",
     "factory:mcp": "node dist/claude-code-mcp.js",
-    "factory:hook": "node dist/claude-code-pretool-hook.js"
+    "factory:hook": "node dist/claude-code-pretool-hook.js",
+    "validate:smoke-report": "node scripts/validate-claude-code-smoke-report.mjs"
   },
   "devDependencies": {
     "@types/node": "22.19.0",
