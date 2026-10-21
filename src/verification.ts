@@ -279,6 +279,8 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let child: ChildProcess | undefined;
   let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;
   let cancelListener: (() => void) | undefined;
+  let stdoutErrorListener: (() => void) | undefined;
+  let stderrErrorListener: (() => void) | undefined;
 
   const resultPromise = new Promise<VerificationEvidenceRecord>((resolve) => { resolveResult = resolve; });
   const finish = (exitCode: number | null) => {
@@ -287,6 +289,8 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     if (timer) clearTimeout(timer);
     if (killTimer) clearTimeout(killTimer);
     if (cancelListener) signal?.removeEventListener("abort", cancelListener);
+    if (stdoutErrorListener) child?.stdout?.removeListener("error", stdoutErrorListener);
+    if (stderrErrorListener) child?.stderr?.removeListener("error", stderrErrorListener);
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
       spawnError || executionError || outputLimitExceeded || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
@@ -383,8 +387,10 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   };
   child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
   child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
-  child.stdout?.once("error", () => stop("stream_error"));
-  child.stderr?.once("error", () => stop("stream_error"));
+  stdoutErrorListener = () => stop("stream_error");
+  stderrErrorListener = () => stop("stream_error");
+  child.stdout?.on("error", stdoutErrorListener);
+  child.stderr?.on("error", stderrErrorListener);
   child.once("error", (error) => {
     spawnError = safeError(error, "Verification process failed to start.");
     finish(null);
