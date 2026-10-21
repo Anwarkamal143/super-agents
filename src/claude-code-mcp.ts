@@ -315,6 +315,13 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Each result was persisted before the runner advanced to another configured check. Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
       }
       case "factory_evidence_submit": {
+        // Keep a handler-level allowlist as defense in depth: even if the
+        // published MCP schema is loosened later, callers cannot inject source,
+        // provenance, or a prebuilt evidence object into this model-only path.
+        const allowedEvidenceFields = new Set(["runId", "expectedRevision", "summary", "kind", "outcome"]);
+        if (Object.keys(args).some((key) => !allowedEvidenceFields.has(key))) {
+          throw new TypeError("factory_evidence_submit accepts only model-reported evidence fields.");
+        }
         const runId = requireString(args, "runId");
         const expectedRevision = requireInteger(args, "expectedRevision");
         const summary = requireString(args, "summary");
