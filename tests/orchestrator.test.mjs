@@ -94,8 +94,8 @@ test("workflow transitions wait until revision-guarded approval consumption comp
       transitionFinished = true;
       return run;
     });
-    await Promise.resolve();
-    assert.equal(transitionFinished, false, "transition must not pass the active revision guard");
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(transitionFinished, false, "transition must remain blocked on the workflow store lock");
 
     releaseOperation();
     assert.deepEqual(await guarded, { current: true, value: "approval-consumed" });
