@@ -361,7 +361,6 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     }
     if (target === "stdout") stdout += accepted.toString("utf8");
     else stderr += accepted.toString("utf8");
-    if (outputTruncated) child?.kill("SIGTERM");
   };
   child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
   child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
