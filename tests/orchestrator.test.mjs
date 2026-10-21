@@ -337,7 +337,7 @@ test("strictly validates runner metadata keys and status/outcome consistency", a
         const contradictory = structuredClone(baseline);
         contradictory[0].evidence.push(makeEvidence(status, outcome));
         await writeFile(store.filePath, JSON.stringify(contradictory));
-        await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+        await assert.rejects(store.load(), /evidence\[0\] has an invalid structure/);
       }
     }
 
@@ -346,7 +346,7 @@ test("strictly validates runner metadata keys and status/outcome consistency", a
     unexpected.runner.rawStdout = "must not be accepted";
     withUnexpectedField[0].evidence.push(unexpected);
     await writeFile(store.filePath, JSON.stringify(withUnexpectedField));
-    await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+    await assert.rejects(store.load(), /evidence\[0\] has an invalid structure/);
   });
 });
 
