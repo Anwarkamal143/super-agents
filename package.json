@@ -9,6 +9,7 @@
   },
   "files": [
     "dist/",
+    "scripts/",
     "factory/",
     "docs/",
     "README.md",
