@@ -60,12 +60,12 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
       }
     }
   });
-  const request = (method, params = {}) => {
+  const request = (method, params = {}, envelope = {}) => {
     const requestId = ++id;
     let timer;
     const promise = new Promise((resolve, reject) => {
       waiting.set(String(requestId), (message) => { clearTimeout(timer); resolve(message); });
-      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }) + "\n");
+      child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params, ...envelope }) + "\n");
       timer = setTimeout(() => {
         waiting.delete(String(requestId));
         reject(new Error(`Timed out waiting for ${method}. stderr=${stderr}`));
@@ -75,6 +75,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     promise.requestId = requestId;
     return promise;
   };
+  const sendRaw = (message) => child.stdin.write(JSON.stringify(message) + "\n");
   const nextElicitation = () => elicitationQueue.length
     ? Promise.resolve(elicitationQueue.shift())
     : new Promise((resolve) => elicitationWaiters.push(resolve));
@@ -101,7 +102,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
+  return { child, request, sendRaw, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -230,6 +231,52 @@ test("MCP bridge rejects unsupported protocol negotiation", async (t) => {
   });
   assert.equal(response.error.code, -32602);
   assert.match(response.error.message, /supports only MCP protocol 2025-11-25/);
+});
+
+test("MCP bridge rejects malformed JSON-RPC envelopes before dispatch", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-envelope-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+
+  const badVersion = await client.request("tools/call", {
+    name: "factory_session_create",
+    arguments: { requestId: "bad-jsonrpc-version" },
+  }, { jsonrpc: "1.0" });
+  assert.equal(badVersion.error.code, -32600);
+
+  const badParams = await client.request("tools/call", "not-an-object");
+  assert.equal(badParams.error.code, -32600);
+
+  // A malformed id cannot be correlated to a response, and a request-only
+  // tools/call with no id is a notification: neither may create a workflow.
+  client.sendRaw({
+    jsonrpc: "2.0",
+    id: { invalid: true },
+    method: "tools/call",
+    params: { name: "factory_session_create", arguments: { requestId: "bad-id" } },
+  });
+  client.sendRaw({
+    jsonrpc: "2.0",
+    method: "tools/call",
+    params: { name: "factory_session_create", arguments: { requestId: "missing-id" } },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 30));
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+
+  const missingMethod = await client.request(undefined, {}, { method: undefined });
+  assert.equal(missingMethod.error.code, -32600);
+
+  const created = await client.tool("factory_session_create", { requestId: "valid-after-invalid" });
+  assert.equal(created.run.status, "created");
 });
 
 test("MCP bridge fails closed when elicitation is unavailable or malformed", async (t) => {
