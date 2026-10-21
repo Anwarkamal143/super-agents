@@ -33,6 +33,7 @@ test("packed package installs into a temporary consumer and exposes ESM, declara
     for (const expected of [
       "package/package.json",
       "package/dist/index.js",
+      "package/scripts/validate-claude-code-smoke-report.mjs",
       "package/dist/index.d.ts",
       "package/factory/board.schema.json",
       "package/factory/board.example.json",
