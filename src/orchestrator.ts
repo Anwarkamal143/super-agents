@@ -403,6 +403,7 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
           (event["kind"] !== undefined && !["transition", "step_started", "step_finished", "step_interrupted", "step_reconciled"].includes(String(event["kind"]))) ||
           (event["stepId"] !== undefined && !isNonEmptyString(event["stepId"])) ||
           (event["stepStatus"] !== undefined && !["running", "succeeded", "failed", "interrupted"].includes(String(event["stepStatus"]))) ||
+          (event["attempt"] !== undefined && (!Number.isSafeInteger(event["attempt"]) || (event["attempt"] as number) < 1)) ||
           (event["actor"] !== undefined && !isNonEmptyString(event["actor"])) ||
           (event["detailDigest"] !== undefined && !isNonEmptyString(event["detailDigest"]))) {
         throw new TypeError(`${label}.events[${eventIndex}] has an invalid structure.`);
