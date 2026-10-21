@@ -101,7 +101,7 @@ test("rejects overall PASS when any check is not PASS", async () => {
 test("rejects duplicate observation fields that make a check ambiguous", async () => {
   const report = (await completedReport()).replace(
     "- Observed: The expected behavior was observed during this check.",
-    "- Observed: The expected behavior was observed during this check.\\n- Observed: conflicting second observation.",
+    "- Observed: The expected behavior was observed during this check.\n- Observed: conflicting second observation.",
   );
   const file = await reportFile(report);
   try {
