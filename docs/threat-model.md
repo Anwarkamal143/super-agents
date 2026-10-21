@@ -71,3 +71,7 @@ The repository test suite includes focused checks for path traversal and symlink
 ## Out of scope
 
 This project does not currently claim a complete CLI product, remote worker orchestration, distributed locking, tamper-evident audit retention, automatic credential redaction, autonomous merge/deploy, or proof that a third-party harness obeys trust-boundary instructions.
+
+### Interrupted workflow step recovery
+
+A host restart or evidence persistence error can leave a step in `running` even if its external command may have completed. The MCP bridge requires host elicitation before marking such steps interrupted and before resolving an interrupted step. Recovery records an audit event and does not replay commands. Retry is allowed only after explicit human confirmation that the prior external effect was reconciled and replay is safe. A human-confirmed step status is not proof of execution and does not create runner-observed evidence. The JSON store and process execution are not one transaction; external process state may remain uncertain and must be inspected before retry.
