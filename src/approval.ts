@@ -329,7 +329,7 @@ function isLedgerState(value: unknown): value is ApprovalLedgerState {
       !isTimestamp(decidedAt) ||
       (status !== "active" && status !== "consumed" && status !== "revoked") ||
       (scopeId !== undefined && !isNonEmptyString(scopeId)) ||
-      (workflowRevision !== undefined && (!Number.isSafeInteger(workflowRevision) || (workflowRevision as number) < 0)) ||
+      (workflowRevision !== undefined && (typeof workflowRevision !== "number" || !Number.isSafeInteger(workflowRevision) || workflowRevision < 0)) ||
       (outcome === "denied" && status !== "revoked") ||
       approvalIds.has(id)
     ) return false;
