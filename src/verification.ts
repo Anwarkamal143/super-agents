@@ -272,6 +272,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let cancelled = false;
   let stopRequested = false;
   let spawnError: string | undefined;
+  let executionError: string | undefined;
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
   let killTimer: ReturnType<typeof setTimeout> | undefined;
@@ -287,7 +288,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     if (killTimer) clearTimeout(killTimer);
     if (cancelListener) signal?.removeEventListener("abort", cancelListener);
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
-      spawnError || outputLimitExceeded || exitCode !== 0 ? "failed" : "passed";
+      spawnError || executionError || outputLimitExceeded || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
       id: id(),
       checkId: check.id,
@@ -307,17 +308,35 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
       observedStdoutBytes: stdoutBytes,
       observedStderrBytes: stderrBytes,
       ...(spawnError ? { reason: spawnError } : timedOut ? { reason: "Check exceeded its timeout." } :
-        cancelled ? { reason: "Check was cancelled." } : outputLimitExceeded ? { reason: "Check exceeded its output limit." } : {}),
+        cancelled ? { reason: "Check was cancelled." } : outputLimitExceeded ? { reason: "Check exceeded its output limit." } :
+          executionError ? { reason: executionError } : {}),
     });
   };
-  const stop = (kind: "timed_out" | "cancelled" | "output_limit") => {
+  const stop = (kind: "timed_out" | "cancelled" | "output_limit" | "stream_error") => {
     if (settled || !child || stopRequested) return;
     stopRequested = true;
     timedOut = kind === "timed_out";
     cancelled = kind === "cancelled";
     if (kind === "output_limit") outputLimitExceeded = true;
-    child.kill("SIGTERM");
-    killTimer = setTimeout(() => child?.kill("SIGKILL"), 250);
+    if (kind === "stream_error" && !executionError) executionError = "Verification output stream failed.";
+    try {
+      child.kill("SIGTERM");
+    } catch {
+      // Still schedule SIGKILL: a failed graceful signal must not disable escalation.
+    }
+    killTimer = setTimeout(() => {
+      if (settled || !child) return;
+      try {
+        const sent = child.kill("SIGKILL");
+        if (!sent && !settled) {
+          executionError ??= "Unable to confirm verification process termination.";
+          finish(null);
+        }
+      } catch {
+        executionError ??= "Unable to confirm verification process termination.";
+        finish(null);
+      }
+    }, 250);
     killTimer.unref();
   };
 
@@ -364,6 +383,8 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   };
   child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
   child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
+  child.stdout?.once("error", () => stop("stream_error"));
+  child.stderr?.once("error", () => stop("stream_error"));
   child.once("error", (error) => {
     spawnError = safeError(error, "Verification process failed to start.");
     finish(null);
