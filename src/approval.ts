@@ -288,8 +288,8 @@ export function canonicalize(value: unknown): string {
   return visit(value);
 }
 
-function isConsequentialAction(action: string): action is ConsequentialAction {
-  return (CONSEQUENT_ACTIONS as readonly string[]).includes(action);
+function isConsequentialAction(action: unknown): action is ConsequentialAction {
+  return typeof action === "string" && (CONSEQUENT_ACTIONS as readonly string[]).includes(action);
 }
 
 const APPROVAL_AUDIT_KINDS: readonly ApprovalAuditKind[] = [
