@@ -279,7 +279,10 @@ test("MCP bridge keeps duplicate-ID errors uncorrelated so the original request 
 
   const originalResponse = await original;
   assert.equal(originalResponse.id, original.requestId);
-  assert.equal(originalResponse.result?.isError, true, "the original operation should settle from its own decline, not from the duplicate");
+  assert.equal(originalResponse.error, undefined, "the original request must not receive the duplicate's JSON-RPC error");
+  const originalPayload = originalResponse.result?.content?.find((entry) => entry.type === "text");
+  assert.ok(originalPayload, JSON.stringify(originalResponse));
+  assert.equal(JSON.parse(originalPayload.text).approved, false, "the original operation should settle from its own decline");
   assert.equal(client.getResponseCount(original.requestId), 1, "exactly one terminal response may use the original request ID");
   const duplicateError = client.getProtocolErrors().find((message) => message.error?.code === -32600);
   assert.ok(duplicateError, "the duplicate should receive an uncorrelated invalid-request error");
