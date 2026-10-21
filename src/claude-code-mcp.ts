@@ -506,7 +506,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             runId,
             workflowRevision: expectedRevision,
             repositoryRoot: cwd,
-            signal,
+            signal: signal ?? new AbortController().signal,
           });
           const latest = await orchestrator.getWorkflow(runId);
           if (!latest || latest.run.revision !== expectedRevision || latest.run.status !== "reviewing") {
