@@ -63,6 +63,12 @@ Persisted audit events and verification evidence are validated field by field be
 
 This validation checks structure and consistency only. A `runner_observed` provenance label is stored metadata, not a cryptographic attestation that a trusted runner executed the claimed check. Do not treat persisted claims as proof beyond the guarantees of the process that wrote them.
 
+## Approval-ledger validation
+
+The file-backed approval store validates every approval and audit event before returning ledger state. It rejects malformed action/outcome/status values, invalid timestamps or payload digests, missing identity fields, invalid optional scope metadata, and duplicate approval/event IDs. A malformed ledger makes policy operations fail closed; the PreToolUse hook denies the governed action when it cannot load trustworthy state.
+
+If validation fails, preserve a copy of the file and investigate or restore a known-good ledger deliberately. Do not silently drop records or auto-repair the ledger, because doing so could erase one-time consumption or audit history. These checks validate structure and basic consistency only: they do not detect a malicious rewrite that preserves a valid JSON shape, authenticate the actor, or provide cryptographic tamper evidence.
+
 ## Operator-configured verification runner
 
 The bridge can execute a verification profile through the existing bounded runner. Configure `FACTORY_VERIFICATION_PROFILE` in the MCP server process environment with operator-reviewed JSON. The profile is **not** accepted as an MCP tool argument and is never discovered from repository files.

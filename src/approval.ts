@@ -288,14 +288,85 @@ export function canonicalize(value: unknown): string {
   return visit(value);
 }
 
-function isConsequentialAction(action: string): action is ConsequentialAction {
-  return (CONSEQUENT_ACTIONS as readonly string[]).includes(action);
+function isConsequentialAction(action: unknown): action is ConsequentialAction {
+  return typeof action === "string" && (CONSEQUENT_ACTIONS as readonly string[]).includes(action);
 }
 
+const APPROVAL_AUDIT_KINDS: readonly ApprovalAuditKind[] = [
+  "decision_recorded",
+  "authorization_denied_unknown_action",
+  "authorization_denied_missing_approval",
+  "authorization_denied_mismatch",
+  "authorization_denied_replay",
+  "authorization_granted",
+  "approval_revoked",
+];
+
 function isLedgerState(value: unknown): value is ApprovalLedgerState {
-  if (!value || typeof value !== "object") return false;
-  const state = value as { approvals?: unknown; events?: unknown };
-  return Array.isArray(state.approvals) && Array.isArray(state.events);
+  if (!isPlainRecord(value)) return false;
+  const approvals = value["approvals"];
+  const events = value["events"];
+  if (!Array.isArray(approvals) || !Array.isArray(events)) return false;
+
+  const approvalIds = new Set<string>();
+  for (const item of approvals) {
+    if (!isPlainRecord(item)) return false;
+    const { id, actionType, payloadDigest, outcome, decidedBy, decidedAt, status, scopeId } = item;
+    if (
+      !isNonEmptyString(id) ||
+      !isConsequentialAction(actionType) ||
+      !isPayloadDigest(payloadDigest) ||
+      (outcome !== "approved" && outcome !== "denied") ||
+      !isNonEmptyString(decidedBy) ||
+      !isTimestamp(decidedAt) ||
+      (status !== "active" && status !== "consumed" && status !== "revoked") ||
+      (scopeId !== undefined && !isNonEmptyString(scopeId)) ||
+      (outcome === "denied" && status !== "revoked") ||
+      approvalIds.has(id)
+    ) return false;
+    approvalIds.add(id);
+  }
+
+  const eventIds = new Set<string>();
+  for (const item of events) {
+    if (!isPlainRecord(item)) return false;
+    const { id, kind, approvalId, actionType, payloadDigest, actor, decisionOutcome, at } = item;
+    if (
+      !isNonEmptyString(id) ||
+      !(APPROVAL_AUDIT_KINDS as readonly unknown[]).includes(kind) ||
+      (approvalId !== undefined && !isNonEmptyString(approvalId)) ||
+      !isNonEmptyString(actionType) ||
+      !isPayloadDigest(payloadDigest) ||
+      !isNonEmptyString(actor) ||
+      (decisionOutcome !== undefined && decisionOutcome !== "approved" && decisionOutcome !== "denied") ||
+      !isTimestamp(at) ||
+      eventIds.has(id)
+    ) return false;
+    if ((kind === "decision_recorded" && (approvalId === undefined || decisionOutcome === undefined)) ||
+        ((kind === "authorization_granted" || kind === "approval_revoked") && approvalId === undefined)) return false;
+    eventIds.add(id);
+  }
+  return true;
+}
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function isNonEmptyString(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0;
+}
+
+function isPayloadDigest(value: unknown): value is string {
+  return typeof value === "string" && /^[a-f0-9]{64}$/.test(value);
+}
+
+function isTimestamp(value: unknown): value is string {
+  return typeof value === "string" && value.trim().length > 0 &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
+    !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
 function isNodeError(error: unknown): error is NodeJS.ErrnoException {
