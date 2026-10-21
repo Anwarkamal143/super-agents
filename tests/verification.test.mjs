@@ -437,10 +437,11 @@ test("failed SIGKILL attempt settles as failed instead of hanging forever", asyn
 });
 
 
-test("verification settles non-successfully when SIGKILL is sent but close never arrives", async () => {
+test("verification settles and releases stdio when SIGKILL is sent but close never arrives", async () => {
   await withRoot(async (root) => {
     const calls = [];
     const authorizations = [];
+    let spawnedChild;
     const spawnProcess = (_executable, _args, _options) => {
       const child = new EventEmitter();
       child.stdout = new PassThrough();
@@ -449,6 +450,7 @@ test("verification settles non-successfully when SIGKILL is sent but close never
         calls.push(signal);
         return true;
       };
+      spawnedChild = child;
       return child;
     };
 
@@ -469,6 +471,12 @@ test("verification settles non-successfully when SIGKILL is sent but close never
     assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
     assert.deepEqual(authorizations, ["stuck-child"]);
     assert.deepEqual(report.checks.map((check) => check.status), ["timed_out", "skipped"]);
+    assert.equal(spawnedChild.stdout.listenerCount("data"), 0);
+    assert.equal(spawnedChild.stderr.listenerCount("data"), 0);
+    assert.equal(spawnedChild.stdout.listenerCount("error"), 0);
+    assert.equal(spawnedChild.stderr.listenerCount("error"), 0);
+    assert.equal(spawnedChild.stdout.destroyed, true);
+    assert.equal(spawnedChild.stderr.destroyed, true);
   });
 });
 
