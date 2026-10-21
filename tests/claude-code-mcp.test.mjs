@@ -1705,8 +1705,7 @@ test("MCP bridge cancels pending plan approval and exits promptly when stdin clo
     exited,
     new Promise((_, reject) => setTimeout(() => reject(new Error("MCP bridge did not exit promptly after stdin closed.")), 1500)),
   ]);
-  await pendingApproval;
-
+  // The disconnected caller cannot receive a tool response; keep its timeout rejection handled.
   const persisted = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
   const run = persisted.find((item) => item.run.id === created.run.id);
   assert.ok(run, "workflow remains persisted after transport shutdown");
