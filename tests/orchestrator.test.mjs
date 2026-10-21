@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -96,5 +96,56 @@ test("duplicate run creation is rejected", async () => {
     const orchestrator = new WorkflowOrchestrator(store);
     await orchestrator.createRun(makeRun());
     await assert.rejects(orchestrator.createRun(makeRun()), WorkflowConflictError);
+  });
+});
+
+
+test("rejects malformed persisted workflow records instead of trusting active-looking status", async () => {
+  await withStore(async (store) => {
+    const filePath = store.filePath;
+    await writeFile(filePath, JSON.stringify([{
+      run: { id: "run-1", status: "running" },
+      events: [],
+      steps: {},
+      evidence: [],
+    }]));
+    await assert.rejects(
+      store.load(),
+      /run must include non-empty id and requestId fields/,
+    );
+  });
+});
+
+test("rejects duplicate persisted workflow run IDs", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("duplicate"));
+    const valid = await store.load();
+    await writeFile(store.filePath, JSON.stringify([...valid, valid[0]]));
+    await assert.rejects(store.load(), /duplicate run id: duplicate/);
+  });
+});
+
+test("loads legacy evidence records without provenance while validating workflow structure", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("legacy-evidence"));
+    const valid = await store.load();
+    const workflow = valid[0];
+    await writeFile(store.filePath, JSON.stringify([{
+      ...workflow,
+      evidence: [{
+        id: "evidence-legacy",
+        runId: "legacy-evidence",
+        kind: "test",
+        outcome: "passed",
+        summary: "Historical record without provenance.",
+        observedAt: "2026-10-20T10:00:00.000Z",
+        artifactIds: [],
+      }],
+    }]));
+    const restored = await store.load();
+    assert.equal(restored[0].evidence[0].id, "evidence-legacy");
+    assert.equal("source" in restored[0].evidence[0], false);
   });
 });
