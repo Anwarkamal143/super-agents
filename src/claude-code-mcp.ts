@@ -371,7 +371,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         // Notifications have no response channel. Invalid request objects with a
         // usable id receive Invalid Request; malformed ids use JSON-RPC's null id.
         if (isPlainObject(parsed) && Object.hasOwn(parsed, "id")) {
-          const id = isValidRequestId(parsed.id) ? parsed.id : null;
+          const id = isValidRequestId(parsed["id"]) ? parsed["id"] : null;
           send({ jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } });
         }
         return;
