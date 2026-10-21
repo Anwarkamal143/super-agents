@@ -348,37 +348,41 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
   for (const [index, candidate] of value.entries()) {
     const label = `Workflow store record at index ${index}`;
     if (!isRecord(candidate)) throw new TypeError(`${label} must be an object.`);
-    const run = candidate.run;
+    const run = candidate["run"];
     if (!isRecord(run)) throw new TypeError(`${label}.run must be an object.`);
-    if (!isNonEmptyString(run.id) || !isNonEmptyString(run.requestId)) {
+    if (!isNonEmptyString(run["id"]) || !isNonEmptyString(run["requestId"])) {
       throw new TypeError(`${label}.run must include non-empty id and requestId fields.`);
     }
-    if (!isWorkflowStatus(run.status)) {
+    if (!isWorkflowStatus(run["status"])) {
       throw new TypeError(`${label}.run.status is not a recognized workflow status.`);
     }
-    if (!Number.isSafeInteger(run.revision) || (run.revision as number) < 0) {
+    if (!Number.isSafeInteger(run["revision"]) || (run["revision"] as number) < 0) {
       throw new TypeError(`${label}.run.revision must be a non-negative safe integer.`);
     }
-    if (!isNonEmptyString(run.createdAt) || !isNonEmptyString(run.updatedAt)) {
+    if (!isNonEmptyString(run["createdAt"]) || !isNonEmptyString(run["updatedAt"])) {
       throw new TypeError(`${label}.run must include non-empty createdAt and updatedAt timestamps.`);
     }
-    if (seenRunIds.has(run.id)) throw new TypeError(`Workflow store contains duplicate run id: ${run.id}`);
-    seenRunIds.add(run.id);
-    if (!Array.isArray(candidate.events) || !candidate.events.every(isRecord)) {
+    const runId = run["id"];
+    if (seenRunIds.has(runId)) throw new TypeError(`Workflow store contains duplicate run id: ${runId}`);
+    seenRunIds.add(runId);
+    const events = candidate["events"];
+    if (!Array.isArray(events) || !events.every(isRecord)) {
       throw new TypeError(`${label}.events must be an array of objects.`);
     }
-    if (!isRecord(candidate.steps)) {
+    const steps = candidate["steps"];
+    if (!isRecord(steps)) {
       throw new TypeError(`${label}.steps must be an object keyed by step id.`);
     }
-    for (const [stepId, step] of Object.entries(candidate.steps)) {
-      if (!isRecord(step) || step.id !== stepId || !isNonEmptyString(step.id) ||
-          !isNonEmptyString(step.startedAt) ||
-          !["running", "succeeded", "failed", "interrupted"].includes(String(step.status)) ||
-          (step.attempt !== undefined && (!Number.isSafeInteger(step.attempt) || (step.attempt as number) < 1))) {
+    for (const [stepId, step] of Object.entries(steps)) {
+      if (!isRecord(step) || step["id"] !== stepId || !isNonEmptyString(step["id"]) ||
+          !isNonEmptyString(step["startedAt"]) ||
+          !["running", "succeeded", "failed", "interrupted"].includes(String(step["status"])) ||
+          (step["attempt"] !== undefined && (!Number.isSafeInteger(step["attempt"]) || (step["attempt"] as number) < 1))) {
         throw new TypeError(`${label}.steps[${JSON.stringify(stepId)}] has an invalid structure.`);
       }
     }
-    if (!Array.isArray(candidate.evidence) || !candidate.evidence.every(isRecord)) {
+    const evidence = candidate["evidence"];
+    if (!Array.isArray(evidence) || !evidence.every(isRecord)) {
       throw new TypeError(`${label}.evidence must be an array of objects.`);
     }
   }
