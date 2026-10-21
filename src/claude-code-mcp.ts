@@ -10,7 +10,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
-import { createInterface } from "node:readline";
+
 import type { WorkflowRun, WorkflowStatus } from "./domain.js";
 import { ApprovalPolicy, JsonFileApprovalStore, digestPayload, type ConsequentialAction } from "./approval.js";
 import { JsonFileWorkflowStore, WorkflowOrchestrator, WorkflowConflictError } from "./orchestrator.js";
@@ -44,6 +44,7 @@ export interface FactoryMcpServerOptions {
 
 const DEFAULT_ELICITATION_TIMEOUT_MS = 45_000;
 const MAX_ELICITATION_TIMEOUT_MS = 120_000;
+const MAX_JSON_RPC_FRAME_BYTES = 1_048_576;
 
 export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {}): Promise<void> {
   const configuredTimeout = options.elicitationTimeoutMs ?? Number(process.env["FACTORY_ELICITATION_TIMEOUT_MS"] ?? DEFAULT_ELICITATION_TIMEOUT_MS);
@@ -57,7 +58,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const approvals = new ApprovalPolicy(new JsonFileApprovalStore(path.join(stateDirectory, "approvals.json")));
   const input = options.input ?? process.stdin;
   const output = options.output ?? process.stdout;
-  const rl = createInterface({ input, crlfDelay: Infinity });
+
   let nextId = 0;
   let clientElicitation = false;
   const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
@@ -353,7 +354,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     }
   };
 
-  rl.on("line", (line) => {
+  const dispatchLine = (line: string): void => {
     void (async () => {
       let parsed: unknown;
       try { parsed = JSON.parse(line) as unknown; }
@@ -432,8 +433,45 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       }
       if (message.id !== undefined) send({ jsonrpc: "2.0", id: message.id, error: { code: -32601, message: "Method not found" } });
     })().catch(() => undefined);
+  };
+
+  // Frame input by bytes rather than readline's unbounded line accumulator.
+  // Once a frame exceeds the cap, drop bytes until its newline and resume with
+  // the next frame; never parse or echo the oversized payload.
+  let frame = Buffer.alloc(0);
+  let droppingOversizedFrame = false;
+  const inputClosed = new Promise<void>((resolve) => {
+    input.once("end", resolve);
+    input.once("close", resolve);
   });
-  await new Promise<void>((resolve) => rl.once("close", resolve));
+  input.on("data", (chunk: Buffer | string) => {
+    const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
+    let offset = 0;
+    while (offset < bytes.length) {
+      const newline = bytes.indexOf(0x0a, offset);
+      const segmentEnd = newline === -1 ? bytes.length : newline;
+      const segment = bytes.subarray(offset, segmentEnd);
+      if (!droppingOversizedFrame) {
+        if (frame.length + segment.length > MAX_JSON_RPC_FRAME_BYTES) {
+          frame = Buffer.alloc(0);
+          droppingOversizedFrame = true;
+          send({ jsonrpc: "2.0", id: null, error: { code: -32700, message: "Input frame exceeds the 1048576-byte limit." } });
+        } else if (segment.length > 0) {
+          frame = frame.length === 0 ? Buffer.from(segment) : Buffer.concat([frame, segment], frame.length + segment.length);
+        }
+      }
+      if (newline === -1) break;
+      if (!droppingOversizedFrame) {
+        let line = frame;
+        if (line.length > 0 && line[line.length - 1] === 0x0d) line = line.subarray(0, line.length - 1);
+        dispatchLine(line.toString("utf8"));
+      }
+      frame = Buffer.alloc(0);
+      droppingOversizedFrame = false;
+      offset = newline + 1;
+    }
+  });
+  await inputClosed;
 }
 
 
