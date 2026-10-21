@@ -625,3 +625,61 @@ test("asynchronous process-start error is redacted and close races settle once",
     assert.match(report.checks[1].reason, /earlier check stopped/);
   });
 });
+
+
+test("verification profiles reject malformed shapes and unknown properties before approval or spawn", async () => {
+  await withRoot(async (root) => {
+    const cases = [
+      { name: "unknown check property", check: { id: "unknown", kind: "test", executable: "node", args: [], shell: true } },
+      { name: "non-boolean skip", check: { id: "skip", kind: "test", executable: "node", args: [], skip: "false" } },
+      { name: "invalid cwd type", check: { id: "cwd", kind: "test", executable: "node", args: [], cwd: 42 } },
+      { name: "argument too long", check: { id: "long-arg", kind: "test", executable: "node", args: ["x".repeat(8193)] } },
+      { name: "too many arguments", check: { id: "many-args", kind: "test", executable: "node", args: Array(129).fill("x") } },
+      { name: "aggregate argument bytes too large", check: { id: "aggregate-args", kind: "test", executable: "node", args: Array(9).fill("x".repeat(8192)) } },
+      { name: "too many environment keys", check: { id: "many-env", kind: "test", executable: "node", args: [], environmentAllowlist: Array.from({ length: 33 }, (_, index) => `ENV_${index}`) } },
+      { name: "timeout too large", check: { id: "long-timeout", kind: "test", executable: "node", args: [], timeoutMs: 600001 } },
+      { name: "output limit too large", check: { id: "large-output", kind: "test", executable: "node", args: [], maxOutputBytes: 10 * 1024 * 1024 + 1 } },
+      { name: "check ID too long", check: { id: "x".repeat(129), kind: "test", executable: "node", args: [] } },
+    ];
+    for (const item of cases) {
+      const fake = fakeSpawn();
+      let authorizationCalls = 0;
+      await assert.rejects(
+        runVerification(config(root, fake.spawnProcess, {
+          checks: [item.check],
+          authorize: async () => { authorizationCalls += 1; return true; },
+        })),
+        VerificationConfigError,
+        item.name,
+      );
+      assert.equal(authorizationCalls, 0, item.name);
+      assert.equal(fake.calls.length, 0, item.name);
+    }
+  });
+});
+
+test("verification profile bounds check count, executable map, and rejects duplicate environment keys", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn();
+    const tooManyChecks = Array.from({ length: 51 }, (_, index) => ({
+      id: `check-${index}`, kind: "test", executable: "node", args: [],
+    }));
+    await assert.rejects(
+      runVerification(config(root, fake.spawnProcess, { checks: tooManyChecks })),
+      /between 1 and 50 entries/,
+    );
+    await assert.rejects(
+      runVerification(config(root, fake.spawnProcess, {
+        checks: [{ id: "duplicate-env", kind: "test", executable: "node", args: [], environmentAllowlist: ["PATH", "PATH"] }],
+      })),
+      /unique valid environment keys/,
+    );
+    await assert.rejects(
+      runVerification(config(root, fake.spawnProcess, {
+        allowedExecutables: Object.fromEntries(Array.from({ length: 33 }, (_, index) => [`node-${index}`, "/usr/bin/node"])),
+      })),
+      /allowedExecutables must contain between 1 and 32 entries/,
+    );
+    assert.equal(fake.calls.length, 0);
+  });
+});

@@ -100,6 +100,32 @@ export class VerificationPersistenceError extends Error {
 const DEFAULT_TIMEOUT_MS = 60_000;
 const DEFAULT_OUTPUT_BYTES = 256 * 1024;
 const DEFAULT_ENV_KEYS = ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot"] as const;
+const MAX_CHECKS = 50;
+const MAX_ALLOWED_EXECUTABLES = 32;
+const MAX_CHECK_ID_LENGTH = 128;
+const MAX_EXECUTABLE_PATH_LENGTH = 4096;
+const MAX_ARGUMENTS_PER_CHECK = 128;
+const MAX_ARGUMENT_LENGTH = 8192;
+const MAX_ARGUMENT_BYTES_PER_CHECK = 64 * 1024;
+const MAX_ENVIRONMENT_KEYS_PER_CHECK = 32;
+const MAX_TIMEOUT_MS = 10 * 60 * 1000;
+const MAX_OUTPUT_BYTES = 10 * 1024 * 1024;
+
+function isPlainRecord(value: unknown): value is Record<string, unknown> {
+  if (value === null || typeof value !== "object" || Array.isArray(value)) return false;
+  const prototype = Object.getPrototypeOf(value);
+  return prototype === Object.prototype || prototype === null;
+}
+
+function assertOnlyKeys(value: Record<string, unknown>, allowed: ReadonlySet<string>, label: string): void {
+  const unsupported = Object.keys(value).find((key) => !allowed.has(key));
+  if (unsupported) throw new VerificationConfigError(`${label} contains unsupported property "${unsupported}".`);
+}
+
+const CHECK_KEYS = new Set([
+  "id", "kind", "executable", "args", "cwd", "environmentAllowlist",
+  "timeoutMs", "maxOutputBytes", "skip",
+]);
 
 export async function runVerification(config: VerificationConfig): Promise<VerificationReport> {
   validateConfig(config);
@@ -217,50 +243,88 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
 }
 
 function validateConfig(config: VerificationConfig): void {
-  if (!config.repositoryRoot.trim()) throw new VerificationConfigError("repositoryRoot must be non-empty.");
-  if (!Array.isArray(config.checks) || config.checks.length === 0) {
-    throw new VerificationConfigError("At least one explicitly configured verification check is required.");
+  if (!isPlainRecord(config)) throw new VerificationConfigError("Verification config must be an object.");
+  if (typeof config.repositoryRoot !== "string" || !config.repositoryRoot.trim()) {
+    throw new VerificationConfigError("repositoryRoot must be non-empty.");
+  }
+  if (!Array.isArray(config.checks) || config.checks.length === 0 || config.checks.length > MAX_CHECKS) {
+    throw new VerificationConfigError(`Checks must contain between 1 and ${MAX_CHECKS} entries.`);
   }
   if (typeof config.authorize !== "function") {
     throw new VerificationConfigError("An authorization callback is required; verification fails closed without it.");
   }
-  for (const [id, executable] of Object.entries(config.allowedExecutables)) {
-    if (!id.trim() || !path.isAbsolute(executable)) {
-      throw new VerificationConfigError("Executable allowlist entries require a stable id and absolute executable path.");
+  if (!isPlainRecord(config.allowedExecutables)) {
+    throw new VerificationConfigError("allowedExecutables must be an object mapping stable IDs to absolute executable paths.");
+  }
+  const executableEntries = Object.entries(config.allowedExecutables);
+  if (executableEntries.length === 0 || executableEntries.length > MAX_ALLOWED_EXECUTABLES) {
+    throw new VerificationConfigError(`allowedExecutables must contain between 1 and ${MAX_ALLOWED_EXECUTABLES} entries.`);
+  }
+  for (const [id, executable] of executableEntries) {
+    if (!id.trim() || id.length > MAX_CHECK_ID_LENGTH ||
+        typeof executable !== "string" || executable.length > MAX_EXECUTABLE_PATH_LENGTH ||
+        executable.includes("\0") || !path.isAbsolute(executable)) {
+      throw new VerificationConfigError("Executable allowlist entries require a bounded stable ID and absolute executable path.");
     }
   }
+
   const seen = new Set<string>();
-  for (const check of config.checks) {
-    if (!check.id.trim() || seen.has(check.id)) throw new VerificationConfigError("Check ids must be non-empty and unique.");
-    seen.add(check.id);
-    if (!["test", "typecheck", "command"].includes(check.kind)) {
-      throw new VerificationConfigError(`Unsupported check kind for ${check.id}.`);
+  for (const rawCheck of config.checks as readonly unknown[]) {
+    if (!isPlainRecord(rawCheck)) throw new VerificationConfigError("Each verification check must be an object.");
+    assertOnlyKeys(rawCheck, CHECK_KEYS, "Verification check");
+    const id = rawCheck["id"];
+    const kind = rawCheck["kind"];
+    const executable = rawCheck["executable"];
+    const args = rawCheck["args"];
+    if (typeof id !== "string" || !id.trim() || id.length > MAX_CHECK_ID_LENGTH || seen.has(id)) {
+      throw new VerificationConfigError(`Check IDs must be non-empty, unique strings no longer than ${MAX_CHECK_ID_LENGTH} characters.`);
     }
-    if (!Object.hasOwn(config.allowedExecutables, check.executable)) {
-      throw new VerificationConfigError(`Check ${check.id} references an executable outside the allowlist.`);
+    seen.add(id);
+    if (kind !== "test" && kind !== "typecheck" && kind !== "command") {
+      throw new VerificationConfigError(`Unsupported check kind for ${id}.`);
     }
-    if (!Array.isArray(check.args) || check.args.some((arg: unknown) => typeof arg !== "string" || arg.includes("\0"))) {
-      throw new VerificationConfigError(`Check ${check.id} has invalid arguments.`);
+    if (typeof executable !== "string" || !Object.hasOwn(config.allowedExecutables, executable)) {
+      throw new VerificationConfigError(`Check ${id} references an executable outside the allowlist.`);
     }
-    if (check.timeoutMs !== undefined && (!Number.isSafeInteger(check.timeoutMs) || check.timeoutMs <= 0)) {
-      throw new VerificationConfigError(`Check ${check.id} timeoutMs must be a positive safe integer.`);
+    if (!Array.isArray(args) || args.length > MAX_ARGUMENTS_PER_CHECK ||
+        args.some((arg: unknown) => typeof arg !== "string" || arg.includes("\0") || arg.length > MAX_ARGUMENT_LENGTH) ||
+        args.reduce((total: number, arg: unknown) => total + (typeof arg === "string" ? Buffer.byteLength(arg, "utf8") : 0), 0) > MAX_ARGUMENT_BYTES_PER_CHECK) {
+      throw new VerificationConfigError(`Check ${id} arguments must be strings within the per-argument and aggregate size limits.`);
     }
-    if (check.maxOutputBytes !== undefined && (!Number.isSafeInteger(check.maxOutputBytes) || check.maxOutputBytes <= 0)) {
-      throw new VerificationConfigError(`Check ${check.id} maxOutputBytes must be a positive safe integer.`);
+    if (rawCheck["cwd"] !== undefined &&
+        (typeof rawCheck["cwd"] !== "string" || !rawCheck["cwd"].trim() ||
+          rawCheck["cwd"].length > MAX_EXECUTABLE_PATH_LENGTH || rawCheck["cwd"].includes("\0"))) {
+      throw new VerificationConfigError(`Check ${id} cwd must be a bounded, non-empty relative path.`);
     }
-    for (const key of check.environmentAllowlist ?? []) {
-      if (!/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) {
-        throw new VerificationConfigError(`Check ${check.id} contains an invalid environment key.`);
+    if (rawCheck["skip"] !== undefined && typeof rawCheck["skip"] !== "boolean") {
+      throw new VerificationConfigError(`Check ${id} skip must be a boolean.`);
+    }
+    if (rawCheck["timeoutMs"] !== undefined &&
+        (!Number.isSafeInteger(rawCheck["timeoutMs"]) || (rawCheck["timeoutMs"] as number) <= 0 ||
+          (rawCheck["timeoutMs"] as number) > MAX_TIMEOUT_MS)) {
+      throw new VerificationConfigError(`Check ${id} timeoutMs must be between 1 and ${MAX_TIMEOUT_MS}.`);
+    }
+    if (rawCheck["maxOutputBytes"] !== undefined &&
+        (!Number.isSafeInteger(rawCheck["maxOutputBytes"]) || (rawCheck["maxOutputBytes"] as number) <= 0 ||
+          (rawCheck["maxOutputBytes"] as number) > MAX_OUTPUT_BYTES)) {
+      throw new VerificationConfigError(`Check ${id} maxOutputBytes must be between 1 and ${MAX_OUTPUT_BYTES}.`);
+    }
+    if (rawCheck["environmentAllowlist"] !== undefined) {
+      const keys = rawCheck["environmentAllowlist"];
+      if (!Array.isArray(keys) || keys.length > MAX_ENVIRONMENT_KEYS_PER_CHECK ||
+          keys.some((key: unknown) => typeof key !== "string" || !/^[A-Za-z_][A-Za-z0-9_]*$/.test(key)) ||
+          new Set(keys).size !== keys.length) {
+        throw new VerificationConfigError(`Check ${id} environmentAllowlist must contain at most ${MAX_ENVIRONMENT_KEYS_PER_CHECK} unique valid environment keys.`);
       }
     }
   }
   for (const [name, value] of [["defaultTimeoutMs", config.defaultTimeoutMs], ["defaultMaxOutputBytes", config.defaultMaxOutputBytes]] as const) {
-    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0)) {
-      throw new VerificationConfigError(`${name} must be a positive safe integer.`);
+    const maximum = name === "defaultTimeoutMs" ? MAX_TIMEOUT_MS : MAX_OUTPUT_BYTES;
+    if (value !== undefined && (!Number.isSafeInteger(value) || value <= 0 || value > maximum)) {
+      throw new VerificationConfigError(`${name} must be a positive safe integer no greater than ${maximum}.`);
     }
   }
 }
-
 async function resolveCheckCwd(root: string, relative: string): Promise<string> {
   if (!relative.trim() || path.isAbsolute(relative) || relative.split(/[\\/]/).some((part) => part === "..")) {
     throw new VerificationConfigError("Check cwd must be a non-empty path contained within repositoryRoot.");
