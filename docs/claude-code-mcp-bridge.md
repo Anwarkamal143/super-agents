@@ -73,6 +73,8 @@ After the JSON-RPC envelope is valid, the bridge also enforces the MCP session l
 
 If the host closes the stdio input pipe, the bridge treats the transport as terminal: it aborts active request controllers, rejects and clears outstanding elicitation requests, and ignores late responses. Pending plan approval is persisted as cancelled; pending consequential-action approval fails closed and cannot create an approval. Reconnect with a fresh MCP session and inspect persisted workflow state before resuming; do not assume an interrupted external effect did not occur.
 
+The disconnect regression suite also exercises native-action approval and verification-command approval. A pending native action is recorded as denied rather than approved; a verification process must not spawn until its own exact check has received host approval. If the connection drops during either prompt, reconnect and inspect the approval ledger and workflow evidence before deciding what to do next.
+
 ## Inbound frame size limit
 
 The stdio bridge accepts newline-delimited JSON-RPC frames up to **1,048,576 bytes (1 MiB)**, measured before UTF-8 decoding and excluding the newline delimiter. Input is copied into a fixed-size buffer; the server does not use an unbounded line accumulator. If a frame exceeds the cap, it is discarded through the next newline and a bounded `-32700` error is emitted without parsing or echoing the payload. Processing resumes with the next frame. CRLF delimiters are supported.
