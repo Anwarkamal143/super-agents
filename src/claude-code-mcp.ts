@@ -672,7 +672,15 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         return;
       }
       if (message.method === "tools/list") {
-        send({ jsonrpc: "2.0", id: message.id, result: { tools: TOOLS } });
+        const tools = TOOLS.map((tool) =>
+          tool.name === "factory_review_run" && !options.reviewProvider
+            ? {
+                ...tool,
+                description: "UNAVAILABLE: no trusted review provider is configured for this server. Do not call this tool to probe availability; model-authored review cannot substitute for review_engine evidence. Configure a trusted host provider before attempting independent review.",
+              }
+            : tool,
+        );
+        send({ jsonrpc: "2.0", id: message.id, result: { tools } });
         return;
       }
       if (message.method === "tools/call") {

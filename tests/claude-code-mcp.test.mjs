@@ -1493,6 +1493,9 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     };
   });
   await embedded.initialize();
+  const availableTools = await embedded.request("tools/list");
+  const availableReview = availableTools.result.tools.find((tool) => tool.name === "factory_review_run");
+  assert.doesNotMatch(availableReview.description, /UNAVAILABLE/i);
   // Unknown model-supplied provenance fields must be rejected by the advertised schema.
   const spoof = await embedded.request("tools/call", {
     name: "factory_review_run",
@@ -1573,6 +1576,9 @@ test("MCP review fails closed when provider is unavailable or returns malformed 
 
   const unavailable = startEmbeddedClient(path.join(cwd, ".factory-state"));
   await unavailable.initialize();
+  const unavailableTools = await unavailable.request("tools/list");
+  const unavailableReview = unavailableTools.result.tools.find((tool) => tool.name === "factory_review_run");
+  assert.match(unavailableReview.description, /UNAVAILABLE: no trusted review provider is configured/i);
   await assert.rejects(
     unavailable.tool("factory_review_run", { runId: unavailableRun.runId, expectedRevision: unavailableRun.revision }),
     /provider is not configured/i,

@@ -21,6 +21,12 @@ The `/factory` skill now instructs the active Claude Code session to use the opt
 
 The bridge is still limited to its documented MCP protocol and local state model. The real interactive Claude Code approval smoke test remains **NOT RUN** until observed and recorded using the [smoke-test report template](claude-code-smoke-report-template.md). Follow [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38) and [issue #35](https://github.com/Anwarkamal143/super-agents/issues/35) for remaining host validation and end-to-end acceptance. Unit tests and skill text do not prove actual host compatibility.
 
+### Trusted review and delivery readiness
+
+The skill distinguishes its own model-led Standards/Spec review from trusted host review evidence. The optional MCP `factory_review_run` tool is usable only when the embedding host configures a trusted `reviewProvider` callback. The tool's `tools/list` description explicitly reports `UNAVAILABLE` when the provider is absent; the skill must not call it as an availability probe. The standalone `factory:mcp` CLI has no provider configured by default, so a passing model review alone leaves delivery readiness blocked. When configured, the host provider must pin the actual diff and return a bounded structured result; the bridge validates it, hashes the reviewed diff, and persists `review_engine` evidence. This is a trust boundary, not cryptographic attestation or proof of authenticated reviewer identity.
+
+A delivery-status response that is not ready is a stop condition, not permission to bypass review. Delivery remains a separate human decision even when all readiness evidence passes.
+
 ## Install the /factory skill in a target repository
 
 Copy the skill and board template into the target repository. From the root of this repository, run the following in the target repo, adjusting the source path if you installed or cloned this project elsewhere:
