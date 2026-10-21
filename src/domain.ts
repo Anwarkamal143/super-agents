@@ -91,6 +91,23 @@ export type EvidenceOutcome = "passed" | "failed" | "skipped" | "unknown";
 
 export type EvidenceSource = "model_reported" | "runner_observed" | "review_engine";
 
+export type RunnerVerificationStatus = "passed" | "failed" | "skipped" | "timed_out" | "cancelled" | "blocked";
+
+export interface RunnerVerificationMetadata {
+  /** Stable ID from the operator-configured verification profile. */
+  readonly checkId: string;
+  readonly status: RunnerVerificationStatus;
+  readonly exitCode: number | null;
+  readonly durationMs: number;
+  readonly observedStdoutBytes: number;
+  readonly observedStderrBytes: number;
+  readonly outputTruncated: boolean;
+  readonly stdoutDigest: string;
+  readonly stderrDigest: string;
+  /** Bounded, sanitized runner-generated reason; never raw stdout/stderr. */
+  readonly reason?: string;
+}
+
 export interface VerificationEvidence {
   /** Provenance is persisted; a model assertion is never promoted to runner evidence. */
   readonly source: EvidenceSource;
@@ -101,4 +118,6 @@ export interface VerificationEvidence {
   readonly summary: string;
   readonly observedAt: string;
   readonly artifactIds: readonly ArtifactId[];
+  /** Structured process observations; only the trusted local verification path may populate this. */
+  readonly runner?: RunnerVerificationMetadata;
 }

@@ -288,6 +288,18 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           await orchestrator.finishStep(runId, stepId, outcome === "passed" ? "succeeded" : "failed", summary, {
             id: randomUUID(), runId, source: "runner_observed", kind, outcome, summary,
             observedAt: check.finishedAt, artifactIds: [],
+            runner: {
+              checkId: check.checkId,
+              status: check.status,
+              exitCode: check.exitCode,
+              durationMs: check.durationMs,
+              observedStdoutBytes: check.observedStdoutBytes,
+              observedStderrBytes: check.observedStderrBytes,
+              outputTruncated: check.outputTruncated,
+              stdoutDigest: check.stdoutDigest,
+              stderrDigest: check.stderrDigest,
+              ...(check.reason ? { reason: check.reason.slice(0, 1000) } : {}),
+            },
           });
           persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, observedStdoutBytes: check.observedStdoutBytes, observedStderrBytes: check.observedStderrBytes, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, ...(check.reason ? { reason: check.reason } : {}) });
         };

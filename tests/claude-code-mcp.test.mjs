@@ -1096,6 +1096,17 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   assert.equal(evidence.length, 1);
   assert.equal(evidence[0].outcome, "passed");
   assert.match(evidence[0].summary, /Runner observed passed/);
+  assert.deepEqual(evidence[0].runner, {
+    checkId: "fixture-check",
+    status: "passed",
+    exitCode: 0,
+    durationMs: report.checks[0].durationMs,
+    observedStdoutBytes: Buffer.byteLength("verified"),
+    observedStderrBytes: Buffer.byteLength("diagnostic"),
+    outputTruncated: false,
+    stdoutDigest: report.checks[0].stdoutDigest,
+    stderrDigest: report.checks[0].stderrDigest,
+  });
 
   const delivery = await client.tool("factory_delivery_status", { runId: created.run.id });
   assert.equal(delivery.runnerObservedEvidenceCount, 1);
