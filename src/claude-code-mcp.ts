@@ -562,7 +562,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
       const segment = bytes.subarray(offset, segmentEnd);
       if (!droppingOversizedFrame) {
         const hasDelimiter = newline !== -1;
-        const hasTrailingCarriageReturn = segment.length > 0 && segment[segment.length - 1] === 0x0d;
+        const hasTrailingCarriageReturn = segment.length > 0
+          ? segment[segment.length - 1] === 0x0d
+          : frameLength > 0 && frame[frameLength - 1] === 0x0d;
         const candidateLength = frameLength + segment.length;
         const delimiterBytes = hasDelimiter && hasTrailingCarriageReturn ? 1 : 0;
         const effectiveLength = candidateLength - delimiterBytes;
