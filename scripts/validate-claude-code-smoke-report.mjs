@@ -76,12 +76,12 @@ function validateReport(report) {
       continue;
     }
 
-    const observedFields = findFields(sectionLines, /^- Observed:\\s*(.*)$/);
+    const observedFields = findFields(sectionLines, /^- Observed:\s*(.*)$/);
     if (observedFields.length !== 1 || isPlaceholder(observedFields[0]?.value)) {
       errors.push(`${prefix} provide exactly one concrete observation after "- Observed:"; do not leave it blank or as a placeholder.`);
     }
 
-    const evidenceFields = findFields(sectionLines, /^- Evidence(?:\\s+\\([^)]*\\))?:\\s*(.*)$/);
+    const evidenceFields = findFields(sectionLines, /^- Evidence(?:\s+\([^)]*\))?:\s*(.*)$/);
     if (evidenceFields.length !== 1 || isPlaceholder(evidenceFields[0]?.value)) {
       errors.push(`${prefix} provide exactly one evidence link/reference after "- Evidence:"; do not leave it blank or as a placeholder.`);
     }
