@@ -1673,3 +1673,62 @@ test("MCP bridge rejects duplicate initialize without resetting negotiated capab
   });
   assert.equal(plan.approved, true);
 });
+
+test("MCP bridge cancels pending plan approval and exits promptly when stdin closes", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stdin-close-"));
+  const client = startClient(cwd, "none", 60_000);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "disconnecting-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stdin-close" });
+  const pendingApproval = client.request("tools/call", {
+    name: "factory_plan_request_approval",
+    arguments: {
+      runId: created.run.id,
+      expectedRevision: 0,
+      plan: "A disconnected host must not approve this plan.",
+    },
+  }).catch(() => undefined);
+  const prompt = await client.nextElicitation();
+  assert.equal(prompt.method, "elicitation/create");
+
+  const exited = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    exited,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("MCP bridge did not exit promptly after stdin closed.")), 1500)),
+  ]);
+  // The disconnected caller cannot receive a tool response; keep its timeout rejection handled.
+  const persisted = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
+  const run = persisted.find((item) => item.run.id === created.run.id);
+  assert.ok(run, "workflow remains persisted after transport shutdown");
+  assert.equal(run.run.status, "cancelled");
+});
+
+test("MCP bridge exits cleanly when stdin reaches EOF without a request", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-clean-eof-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const exits = [];
+  client.child.on("close", (code, signal) => exits.push({ code, signal }));
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    closed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("MCP bridge did not exit after clean EOF.")), 1500)),
+  ]);
+  assert.equal(exits.length, 1, "end and close must not run shutdown more than once");
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+});
+

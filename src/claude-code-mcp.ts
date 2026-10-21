@@ -74,9 +74,25 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
   const requestControllers = new Map<string | number, AbortController>();
   const inFlightToolCallIds = new Set<string | number>();
+  let transportClosed = false;
 
-  const send = (message: RpcMessage) => { output.write(JSON.stringify(message) + "\n"); };
+  const send = (message: RpcMessage) => {
+    if (transportClosed) return;
+    output.write(JSON.stringify(message) + "\n");
+  };
+  const closeTransport = () => {
+    if (transportClosed) return;
+    transportClosed = true;
+    for (const controller of requestControllers.values()) controller.abort();
+    requestControllers.clear();
+    for (const [id, request] of pending) {
+      pending.delete(id);
+      request.reject(new Error("MCP input closed while awaiting host response; operation failed closed."));
+    }
+    inFlightToolCallIds.clear();
+  };
   const rpcRequest = (method: string, params: JsonObject, parentRequestId?: string | number): Promise<RpcMessage> => new Promise((resolve, reject) => {
+    if (transportClosed) { reject(new Error("MCP transport is closed; approval is unavailable.")); return; }
     if (!clientElicitation) { reject(new Error("Host does not advertise MCP elicitation; approval is unavailable.")); return; }
     const id = `factory-bridge-${++nextId}`;
     const timer = setTimeout(() => { pending.delete(id); reject(new Error("Human elicitation timed out; action blocked.")); }, elicitationTimeoutMs);
@@ -528,8 +544,12 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   let frameLength = 0;
   let droppingOversizedFrame = false;
   const inputClosed = new Promise<void>((resolve) => {
-    input.once("end", resolve);
-    input.once("close", resolve);
+    const onClosed = () => {
+      closeTransport();
+      resolve();
+    };
+    input.once("end", onClosed);
+    input.once("close", onClosed);
   });
   input.on("data", (chunk: Buffer | string) => {
     const bytes = Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk);
