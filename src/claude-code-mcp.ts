@@ -18,7 +18,7 @@ import { WORKFLOW_TRANSITIONS } from "./workflow.js";
 import { runVerification, type VerificationCheck } from "./verification.js";
 
 type JsonObject = Record<string, unknown>;
-type RpcMessage = { jsonrpc: "2.0"; id?: string | number; method?: string; params?: JsonObject; result?: unknown; error?: { code: number; message: string } };
+type RpcMessage = { jsonrpc: "2.0"; id?: string | number | null; method?: string; params?: JsonObject; result?: unknown; error?: { code: number; message: string } };
 type ElicitationAction = "accept" | "decline" | "cancel";
 
 const TOOLS = [
@@ -355,15 +355,34 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
 
   rl.on("line", (line) => {
     void (async () => {
-      let message: RpcMessage;
-      try { message = JSON.parse(line) as RpcMessage; }
+      let parsed: unknown;
+      try { parsed = JSON.parse(line) as unknown; }
       catch { send({ jsonrpc: "2.0", id: "parse-error", error: { code: -32700, message: "Parse error" } }); return; }
-      if (message.id !== undefined && pending.has(message.id)) {
-        pending.get(message.id)!.resolve(message);
-        pending.delete(message.id);
+
+      // Host elicitation replies are JSON-RPC responses, not requests. Accept only
+      // a valid response envelope before resolving a pending approval interaction.
+      if (isJsonRpcResponse(parsed) && pending.has(parsed.id)) {
+        pending.get(parsed.id)!.resolve(parsed);
+        pending.delete(parsed.id);
         return;
       }
-      if (!message.method) return;
+
+      if (!isJsonRpcRequest(parsed)) {
+        // Notifications have no response channel. Invalid request objects with a
+        // usable id receive Invalid Request; malformed ids use JSON-RPC's null id.
+        if (isPlainObject(parsed) && Object.hasOwn(parsed, "id")) {
+          const id = isValidRequestId(parsed["id"]) ? parsed["id"] : null;
+          send({ jsonrpc: "2.0", id, error: { code: -32600, message: "Invalid Request" } });
+        }
+        return;
+      }
+      const message = parsed;
+
+      // Only the two explicitly supported notifications may be processed without
+      // an id. In particular, tools/call must never execute as a notification.
+      if (message.id === undefined &&
+          message.method !== "notifications/initialized" &&
+          message.method !== "notifications/cancelled") return;
       if (message.method === "initialize") {
         const capabilities = message.params?.["capabilities"] as JsonObject | undefined;
         const requestedProtocol = message.params?.["protocolVersion"];
@@ -419,6 +438,32 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
 
 
 /** Validate raw tool arguments against the same schema advertised by tools/list. */
+
+function isPlainObject(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value) &&
+    Object.getPrototypeOf(value) === Object.prototype;
+}
+
+function isValidRequestId(value: unknown): value is string | number {
+  return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
+}
+
+function isJsonRpcRequest(value: unknown): value is RpcMessage & { id?: string | number } {
+  if (!isPlainObject(value) || value["jsonrpc"] !== "2.0" ||
+      typeof value["method"] !== "string" || value["method"].length === 0) return false;
+  if (Object.hasOwn(value, "id") && !isValidRequestId(value["id"])) return false;
+  if (Object.hasOwn(value, "params") && !isPlainObject(value["params"])) return false;
+  return true;
+}
+
+function isJsonRpcResponse(value: unknown): value is RpcMessage & { id: string | number } {
+  if (!isPlainObject(value) || value["jsonrpc"] !== "2.0" ||
+      !isValidRequestId(value["id"]) || Object.hasOwn(value, "method")) return false;
+  const hasResult = Object.hasOwn(value, "result");
+  const hasError = Object.hasOwn(value, "error");
+  return hasResult !== hasError;
+}
+
 function validateToolArguments(name: string, args: JsonObject): void {
   const tool = TOOLS.find((item) => item.name === name);
   if (!tool) throw new TypeError(`Unknown tool: ${name}`);
