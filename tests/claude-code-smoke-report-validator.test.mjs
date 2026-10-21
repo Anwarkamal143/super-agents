@@ -65,7 +65,7 @@ test("rejects a missing evidence reference", async () => {
   try {
     const result = run(file.reportPath);
     assert.equal(result.status, 1);
-    assert.match(result.stderr, /Check 4 .*add an evidence link\/reference/);
+    assert.match(result.stderr, /Check 4 .*provide exactly one evidence link\/reference/);
   } finally {
     await file.cleanup();
   }
