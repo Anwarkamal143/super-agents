@@ -10,7 +10,7 @@ Security objectives:
 
 - Repository and model-authored content cannot silently become privileged instructions or executable commands.
 - Consequential operations fail closed unless an exact action payload is approved.
-- Verification evidence reflects observed outcomes and distinguishes failure, cancellation, timeout, skip, and block.
+- Verification evidence reflects observed outcomes and distinguishes failure, cancellation, timeout, skip, and block; runner results retain validated structured process metadata and output digests.
 - Recovery does not blindly replay ambiguous external side effects.
 - Secrets are not intentionally copied into approval audit payloads or verification environment evidence.
 - The factory does not merge pull requests or deploy autonomously.

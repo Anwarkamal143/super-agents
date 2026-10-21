@@ -438,12 +438,35 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
           !isNonEmptyString(item["observedAt"]) ||
           !Array.isArray(item["artifactIds"]) ||
           !item["artifactIds"].every(isNonEmptyString) ||
-          (item["source"] !== undefined && !["model_reported", "runner_observed", "review_engine"].includes(String(item["source"])))) {
+          (item["source"] !== undefined && !["model_reported", "runner_observed", "review_engine"].includes(String(item["source"]))) ||
+          (item["runner"] !== undefined && (
+            item["source"] !== "runner_observed" ||
+            !isValidRunnerVerificationMetadata(item["runner"])
+          ))) {
         throw new TypeError(`${label}.evidence[${evidenceIndex}] has an invalid structure.`);
       }
     }
   }
   return value as PersistedWorkflow[];
+}
+
+function isValidRunnerVerificationMetadata(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  const checkId = value["checkId"];
+  const status = value["status"];
+  const exitCode = value["exitCode"];
+  const reason = value["reason"];
+  return typeof checkId === "string" &&
+    /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(checkId) &&
+    ["passed", "failed", "skipped", "timed_out", "cancelled", "blocked"].includes(String(status)) &&
+    (exitCode === null || (Number.isSafeInteger(exitCode) && (exitCode as number) >= 0 && (exitCode as number) <= 255)) &&
+    typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 &&
+    Number.isSafeInteger(value["observedStdoutBytes"]) && (value["observedStdoutBytes"] as number) >= 0 &&
+    Number.isSafeInteger(value["observedStderrBytes"]) && (value["observedStderrBytes"] as number) >= 0 &&
+    typeof value["outputTruncated"] === "boolean" &&
+    typeof value["stdoutDigest"] === "string" && /^[a-f0-9]{64}$/.test(value["stdoutDigest"]) &&
+    typeof value["stderrDigest"] === "string" && /^[a-f0-9]{64}$/.test(value["stderrDigest"]) &&
+    (reason === undefined || (typeof reason === "string" && reason.length > 0 && reason.length <= 1000));
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {

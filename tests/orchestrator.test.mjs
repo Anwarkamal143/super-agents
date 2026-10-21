@@ -252,6 +252,74 @@ test("accepts current evidence with recognized provenance and artifact IDs", asy
 });
 
 
+test("rejects malformed structured runner verification metadata", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("runner-metadata"));
+    const valid = await store.load();
+    const corrupted = structuredClone(valid);
+    corrupted[0].evidence.push({
+      id: "runner-evidence",
+      runId: "runner-metadata",
+      source: "runner_observed",
+      kind: "test",
+      outcome: "passed",
+      summary: "Runner observed test passed.",
+      observedAt: "2026-10-20T10:00:00.000Z",
+      artifactIds: [],
+      runner: {
+        checkId: "fixture-check",
+        status: "passed",
+        exitCode: 0,
+        durationMs: 5.25,
+        observedStdoutBytes: 7,
+        observedStderrBytes: 0,
+        outputTruncated: false,
+        stdoutDigest: "a".repeat(64),
+        stderrDigest: "b".repeat(64),
+      },
+    });
+    await writeFile(store.filePath, JSON.stringify(corrupted));
+    assert.equal((await store.load())[0].evidence[0].runner.checkId, "fixture-check");
+
+    corrupted[0].evidence[0].runner.stdoutDigest = "not-a-digest";
+    await writeFile(store.filePath, JSON.stringify(corrupted));
+    await assert.rejects(store.load(), /evidence\[0\] has an invalid structure/);
+  });
+});
+
+test("rejects runner metadata attached to model-reported evidence", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("spoofed-runner-metadata"));
+    const valid = await store.load();
+    const corrupted = structuredClone(valid);
+    corrupted[0].evidence.push({
+      id: "spoofed-evidence",
+      runId: "spoofed-runner-metadata",
+      source: "model_reported",
+      kind: "test",
+      outcome: "passed",
+      summary: "Model claim.",
+      observedAt: "2026-10-20T10:00:00.000Z",
+      artifactIds: [],
+      runner: {
+        checkId: "fixture-check",
+        status: "passed",
+        exitCode: 0,
+        durationMs: 5,
+        observedStdoutBytes: 0,
+        observedStderrBytes: 0,
+        outputTruncated: false,
+        stdoutDigest: "a".repeat(64),
+        stderrDigest: "b".repeat(64),
+      },
+    });
+    await writeFile(store.filePath, JSON.stringify(corrupted));
+    await assert.rejects(store.load(), /evidence\[0\] has an invalid structure/);
+  });
+});
+
 test("rejects malformed persisted step fields and terminal state mismatches", async () => {
   await withStore(async (store) => {
     const orchestrator = new WorkflowOrchestrator(store);
