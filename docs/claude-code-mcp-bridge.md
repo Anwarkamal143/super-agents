@@ -71,6 +71,8 @@ Only `notifications/initialized` and `notifications/cancelled` are handled as no
 
 After the JSON-RPC envelope is valid, the bridge also enforces the MCP session lifecycle: only a successful `initialize` response followed by `notifications/initialized` enables tool listing or calls. Tool requests received earlier return `-32002 Server not initialized` and do not touch workflow state. A second `initialize` on the same connection returns `-32600` and cannot replace the originally negotiated capabilities. If initialization fails, correct the host's protocol/capabilities and reconnect; do not treat a tool error as approval or continue a partially initialized workflow.
 
+If the host closes the stdio input pipe, the bridge treats the transport as terminal: it aborts active request controllers, rejects and clears outstanding elicitation requests, and ignores late responses. Pending plan approval is persisted as cancelled; pending consequential-action approval fails closed and cannot create an approval. Reconnect with a fresh MCP session and inspect persisted workflow state before resuming; do not assume an interrupted external effect did not occur.
+
 ## Inbound frame size limit
 
 The stdio bridge accepts newline-delimited JSON-RPC frames up to **1,048,576 bytes (1 MiB)**, measured before UTF-8 decoding and excluding the newline delimiter. Input is copied into a fixed-size buffer; the server does not use an unbounded line accumulator. If a frame exceeds the cap, it is discarded through the next newline and a bounded `-32700` error is emitted without parsing or echoing the payload. Processing resumes with the next frame. CRLF delimiters are supported.
