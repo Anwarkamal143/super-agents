@@ -49,7 +49,7 @@ Use the supported Claude Code local/project settings mechanism for your environm
 
 **Do not enable the bridge without the PreToolUse gate.** MCP approval is an interaction, not a sandbox. If the hook is absent, misconfigured, or cannot read the same state directory, direct native tool calls are not technically gated by this server.
 
-The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `Bash` unless it finds an active approval for the exact canonical `{ toolName, toolInput }` payload. The approval is consumed once. A changed argument or replay is denied. Other tool integrations and external processes are outside this hook's boundary; keep Claude Code's normal permission controls enabled.
+The hook defaults to deny for `Write`, `Edit`, `MultiEdit`, `NotebookEdit`, and `Bash` unless it finds an active approval for the exact canonical `{ toolName, toolInput }` payload **and** the current workflow revision. A phase/state revision change makes an older approval stale; the hook revokes it and denies the action, even if the run is still active. Legacy approvals without revision metadata are denied and revoked. The approval is consumed once. A changed argument or replay is denied. Other tool integrations and external processes are outside this hook's boundary; keep Claude Code's normal permission controls enabled.
 
 ## Persisted-state validation and corruption recovery
 

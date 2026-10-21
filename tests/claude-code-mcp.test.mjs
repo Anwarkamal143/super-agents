@@ -714,6 +714,54 @@ test("PreToolUse hook denies when no approval state exists", async (t) => {
 });
 
 
+test("PreToolUse hook revokes an exact-payload approval after the workflow revision advances", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-stale-revision-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stale-revision-approval" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Approve one action, then advance the workflow before executing it.",
+  });
+  assert.equal(plan.approved, true);
+
+  const toolInput = { file_path: "/tmp/stale-revision.txt", content: "must remain blocked" };
+  const approval = await client.tool("factory_action_request_approval", {
+    runId: created.run.id,
+    actionType: "file.write",
+    toolName: "Write",
+    toolInput,
+    reason: "Test approval revision binding.",
+  });
+  assert.equal(approval.approved, true);
+  assert.equal(approval.workflowRevision, plan.run.revision);
+
+  const advanced = await client.tool("factory_phase_transition", {
+    runId: created.run.id,
+    expectedRevision: approval.workflowRevision,
+    to: "verifying",
+  });
+  assert.equal(advanced.revision, approval.workflowRevision + 1);
+
+  const result = await runHook(cwd, "Write", toolInput);
+  assert.equal(result.hookSpecificOutput.permissionDecision, "deny");
+  assert.match(result.hookSpecificOutput.permissionDecisionReason, /revision|stale/i);
+
+  const ledger = JSON.parse(await import("node:fs/promises").then(({ readFile }) => readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8")));
+  assert.equal(ledger.approvals.find((item) => item.id === approval.approvalId).status, "revoked");
+});
+
+
 test("PreToolUse hook allows at most one concurrent consumer of a one-time approval", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-hook-concurrent-"));
   const client = startClient(cwd);

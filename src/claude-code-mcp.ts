@@ -244,9 +244,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         // Elicitation gives a human decision; the host does not expose a cryptographically authenticated actor identity.
         const approval = await approvals.recordDecision({
           actionType, payload, outcome: "approved", decidedBy: "claude-code-elicitation-host",
-          rationale: reason, scopeId: runId,
+          rationale: reason, scopeId: runId, workflowRevision: latest.run.revision,
         });
-        return { approved: true, approvalId: approval.id, payloadDigest: digest, singleUse: true, actorIdentity: "host does not expose authenticated identity" };
+        return { approved: true, approvalId: approval.id, payloadDigest: digest, workflowRevision: latest.run.revision, singleUse: true, actorIdentity: "host does not expose authenticated identity" };
       }
       case "factory_verification_run": {
         const runId = requireString(args, "runId");
@@ -298,14 +298,23 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           signal,
           onCheckComplete: persistCheck,
           authorize: async (_actionType, payload) => {
+            const beforePrompt = await orchestrator.getWorkflow(runId);
+            if (!beforePrompt || (beforePrompt.run.status !== "running" && beforePrompt.run.status !== "verifying")) return false;
             const response = await requestHuman(
               `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
               parentRequestId,
             );
-            const accepted = response.action === "accept" && response.content?.["decision"] === "approve";
+            const latest = await orchestrator.getWorkflow(runId);
+            const stillCurrent = latest !== undefined && latest !== null &&
+              latest.run.revision === beforePrompt.run.revision &&
+              (latest.run.status === "running" || latest.run.status === "verifying");
+            const accepted = stillCurrent && response.action === "accept" && response.content?.["decision"] === "approve";
             const approval = await approvals.recordDecision({
               actionType: "command.execute", payload, outcome: accepted ? "approved" : "denied",
-              decidedBy: "claude-code-elicitation-host", rationale: `Verification check ${payload.checkId}`, scopeId: runId,
+              decidedBy: "claude-code-elicitation-host",
+              rationale: stillCurrent ? `Verification check ${payload.checkId}` : "Workflow changed while verification approval was pending.",
+              scopeId: runId,
+              ...(latest ? { workflowRevision: latest.run.revision } : {}),
             });
             if (!accepted) return false;
             const authorization = await approvals.authorizeAndConsume("command.execute", payload, approval.id, "factory-verification-runner");

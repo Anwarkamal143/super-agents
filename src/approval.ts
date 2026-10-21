@@ -25,6 +25,8 @@ export interface ApprovalDecisionInput {
   readonly rationale?: string;
   /** Optional workflow/run scope for host integrations; not an authenticated identity. */
   readonly scopeId?: string;
+  /** Workflow revision the human approved; absent on legacy records and never sufficient for native-tool authorization. */
+  readonly workflowRevision?: number;
 }
 
 export interface ApprovalRecord {
@@ -36,6 +38,8 @@ export interface ApprovalRecord {
   readonly decidedAt: string;
   readonly status: ApprovalStatus;
   readonly scopeId?: string;
+  /** Workflow revision the human approved; legacy records may omit it. */
+  readonly workflowRevision?: number;
 }
 
 export type ApprovalAuditKind =
@@ -152,6 +156,9 @@ export class ApprovalPolicy {
       }
       if (!input.decidedBy.trim()) throw new TypeError("decidedBy must be non-empty.");
       if (input.scopeId !== undefined && !input.scopeId.trim()) throw new TypeError("scopeId must be non-empty when provided.");
+      if (input.workflowRevision !== undefined && (!Number.isSafeInteger(input.workflowRevision) || input.workflowRevision < 0)) {
+        throw new TypeError("workflowRevision must be a non-negative safe integer when provided.");
+      }
       const payloadDigest = digestPayload(input.payload);
       const state = await this.store.load();
       const at = this.now();
@@ -164,6 +171,7 @@ export class ApprovalPolicy {
         decidedAt: at,
         status: input.outcome === "approved" ? "active" : "revoked",
         ...(input.scopeId ? { scopeId: input.scopeId } : {}),
+        ...(input.workflowRevision !== undefined ? { workflowRevision: input.workflowRevision } : {}),
       };
       const event: ApprovalAuditEvent = {
         id: this.id(),
@@ -311,7 +319,7 @@ function isLedgerState(value: unknown): value is ApprovalLedgerState {
   const approvalIds = new Set<string>();
   for (const item of approvals) {
     if (!isPlainRecord(item)) return false;
-    const { id, actionType, payloadDigest, outcome, decidedBy, decidedAt, status, scopeId } = item;
+    const { id, actionType, payloadDigest, outcome, decidedBy, decidedAt, status, scopeId, workflowRevision } = item;
     if (
       !isNonEmptyString(id) ||
       !isConsequentialAction(actionType) ||
@@ -321,6 +329,7 @@ function isLedgerState(value: unknown): value is ApprovalLedgerState {
       !isTimestamp(decidedAt) ||
       (status !== "active" && status !== "consumed" && status !== "revoked") ||
       (scopeId !== undefined && !isNonEmptyString(scopeId)) ||
+      (workflowRevision !== undefined && (!Number.isSafeInteger(workflowRevision) || (workflowRevision as number) < 0)) ||
       (outcome === "denied" && status !== "revoked") ||
       approvalIds.has(id)
     ) return false;

@@ -69,6 +69,11 @@ async function main(): Promise<void> {
       deny("The workflow run is no longer active; stale approval revoked and action denied.");
       return;
     }
+    if (candidate.workflowRevision === undefined || candidate.workflowRevision !== workflow.run.revision) {
+      await policy.revoke(candidate.id, "claude-code-pretool-hook");
+      deny("Approval is missing its workflow revision or is stale; approval revoked and action denied.");
+      return;
+    }
     const authorization = await policy.authorizeAndConsume(actionType, payload, candidate.id, "claude-code-pretool-hook");
     if (!authorization.allowed) {
       deny(`Approval could not be consumed safely (${authorization.reason}); action denied.`);
