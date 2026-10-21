@@ -494,6 +494,27 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         if (record.run.revision !== expectedRevision) throw new WorkflowConflictError("Stale revision; reload before requesting review.");
         if (record.run.status !== "reviewing") throw new WorkflowConflictError("Review can only run after the workflow enters the reviewing phase.");
         const reviewStepId = `review-run-${runId}`;
+        const priorStep = record.steps[reviewStepId];
+        if (priorStep?.status === "failed") {
+          const approval = await requestHuman(
+            `Retry failed trusted review? This starts a new provider attempt and does not make the previous failure successful. Inspect the prior result first. Run: ${runId}. Revision: ${expectedRevision}. Previous attempt: ${priorStep.attempt ?? 1}.`,
+            parentRequestId,
+          );
+          if (approval.action !== "accept" || approval.content?.["decision"] !== "approve") {
+            return {
+              status: "blocked",
+              reason: "Retry of the failed trusted review was declined, cancelled, or not explicitly approved.",
+              previousAttempt: priorStep.attempt ?? 1,
+            };
+          }
+          const latest = await orchestrator.getWorkflow(runId);
+          const latestStep = latest?.steps[reviewStepId];
+          if (!latest || latest.run.revision !== expectedRevision || latest.run.status !== "reviewing" ||
+              !latestStep || latestStep.status !== "failed" ||
+              (latestStep.attempt ?? 1) !== (priorStep.attempt ?? 1)) {
+            throw new WorkflowConflictError("Review state changed while retry approval was pending; reload and inspect before retrying.");
+          }
+        }
         const step = await orchestrator.beginStep(runId, reviewStepId);
         if (step.status !== "started") {
           throw new WorkflowConflictError(`Review cannot start safely (status: ${step.status}); inspect or reconcile the existing run before retrying.`);
@@ -569,7 +590,9 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const reviewEngine = record.evidence.filter((item) => item.source === "review_engine");
         const modelReportedEvidencePassed = modelReported.length > 0 && modelReported.every((item) => item.outcome === "passed");
         const runnerObservedEvidencePassed = runnerObserved.length > 0 && runnerObserved.every((item) => item.outcome === "passed");
-        const reviewEngineEvidencePassed = reviewEngine.length > 0 && reviewEngine.every((item) => item.outcome === "passed");
+        // Keep prior failed attempts for audit, but readiness follows the latest trusted review result.
+        const latestReviewEvidence = reviewEngine.at(-1);
+        const reviewEngineEvidencePassed = latestReviewEvidence?.outcome === "passed";
         const verificationRun = record.steps[`verification-run-${runId}`];
         const noUnresolvedSteps = Object.values(record.steps).every((step) =>
           step.status !== "running" && step.status !== "interrupted" && step.status !== "failed");

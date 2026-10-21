@@ -14,6 +14,7 @@ export interface WorkflowEvent {
   readonly kind?: "transition" | "step_started" | "step_finished" | "step_interrupted" | "step_reconciled";
   readonly stepId?: string;
   readonly stepStatus?: StepStatus;
+  readonly attempt?: number;
   readonly actor?: string;
   /** Digest only; free-form summaries/reasons are deliberately not copied into the audit trail. */
   readonly detailDigest?: string;
@@ -230,7 +231,7 @@ export class WorkflowOrchestrator {
         steps: { ...current.steps, [stepId]: step },
         events: [...current.events, {
           runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
-          at, kind: "step_started", stepId, stepStatus: "running",
+          at, kind: "step_started", stepId, stepStatus: "running", attempt: step.attempt,
         }],
       };
       await this.writeAll(next);
@@ -265,7 +266,7 @@ export class WorkflowOrchestrator {
         steps: { ...current.steps, [stepId]: step },
         events: [...current.events, {
           runId, revision: current.run.revision, from: current.run.status, to: current.run.status,
-          at, kind: "step_finished", stepId, stepStatus: outcome,
+          at, kind: "step_finished", stepId, stepStatus: outcome, attempt: step.attempt,
           detailDigest: digestText(summary),
         }],
         evidence: evidence ? [...current.evidence, evidence] : current.evidence,
@@ -402,6 +403,7 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
           (event["kind"] !== undefined && !["transition", "step_started", "step_finished", "step_interrupted", "step_reconciled"].includes(String(event["kind"]))) ||
           (event["stepId"] !== undefined && !isNonEmptyString(event["stepId"])) ||
           (event["stepStatus"] !== undefined && !["running", "succeeded", "failed", "interrupted"].includes(String(event["stepStatus"]))) ||
+          (event["attempt"] !== undefined && (!Number.isSafeInteger(event["attempt"]) || (event["attempt"] as number) < 1)) ||
           (event["actor"] !== undefined && !isNonEmptyString(event["actor"])) ||
           (event["detailDigest"] !== undefined && !isNonEmptyString(event["detailDigest"]))) {
         throw new TypeError(`${label}.events[${eventIndex}] has an invalid structure.`);
