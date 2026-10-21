@@ -63,18 +63,17 @@ async function main(): Promise<void> {
       return;
     }
     const orchestrator = new WorkflowOrchestrator(new JsonFileWorkflowStore(path.join(stateDirectory, "workflows.json")));
-    const workflow = await orchestrator.getWorkflow(runId);
-    if (!workflow || !["running", "verifying", "reviewing"].includes(workflow.run.status)) {
+    const guarded = await orchestrator.withActiveWorkflowRevision(
+      runId,
+      candidate.workflowRevision ?? -1,
+      () => policy.authorizeAndConsume(actionType, payload, candidate.id, "claude-code-pretool-hook"),
+    );
+    if (!guarded.current) {
       await policy.revoke(candidate.id, "claude-code-pretool-hook");
-      deny("The workflow run is no longer active; stale approval revoked and action denied.");
+      deny("The workflow run is missing, inactive, or at a different revision; stale approval revoked and action denied.");
       return;
     }
-    if (candidate.workflowRevision === undefined || candidate.workflowRevision !== workflow.run.revision) {
-      await policy.revoke(candidate.id, "claude-code-pretool-hook");
-      deny("Approval is missing its workflow revision or is stale; approval revoked and action denied.");
-      return;
-    }
-    const authorization = await policy.authorizeAndConsume(actionType, payload, candidate.id, "claude-code-pretool-hook");
+    const authorization = guarded.value;
     if (!authorization.allowed) {
       deny(`Approval could not be consumed safely (${authorization.reason}); action denied.`);
       return;
