@@ -77,7 +77,7 @@ This protects the bridge from oversized single-frame buffering and JSON parsing.
 
 ## Concurrent tool-call limit
 
-The bridge accepts at most **16 in-flight `tools/call` requests**. A request that reuses an ID still in flight receives JSON-RPC `-32600` and is not dispatched a second time. A new request arriving at capacity receives `-32000` with a retry-after-completion message; it is not queued and cannot mutate workflow or approval state. Request IDs and capacity slots are released in a `finally` path after success or failure, including host cancellation.
+The bridge accepts at most **16 in-flight `tools/call` requests**. A request that reuses an ID still in flight receives JSON-RPC `-32600` with a `null` response ID and is not dispatched a second time. The null ID is deliberate: replying with the active ID would be indistinguishable from the original request's eventual response and could incorrectly settle the original client promise. Clients should treat this as an uncorrelated protocol error, not as completion of the original request. A new request arriving at capacity receives `-32000` with a retry-after-completion message; it is not queued and cannot mutate workflow or approval state. Request IDs and capacity slots are released in a `finally` path after success or failure, including host cancellation.
 
 This bounds concurrent tool-handler work and pending elicitation pressure, but it is not a total process resource limit: one active tool can still consume resources within its own documented bounds, and an individual input chunk may already have been allocated by Node. Clients should wait for a response or cancellation before retrying a busy request, using a fresh request ID for each new attempt.
 
