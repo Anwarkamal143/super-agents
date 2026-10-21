@@ -465,6 +465,50 @@ test("MCP bridge fails closed when elicitation is unavailable or malformed", asy
   assert.equal(malformedApproval.run.status, "cancelled");
 });
 
+test("MCP action approval persists a denial when the host does not advertise elicitation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-action-no-elicitation-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "initially-capable-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "action-no-elicitation" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id, expectedRevision: 0, plan: "Approve the plan before disabling host elicitation.",
+  });
+  assert.equal(plan.approved, true);
+
+  // Model a host capability change before the consequential action request.
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25", capabilities: {},
+    clientInfo: { name: "no-elicitation-host", version: "1.0.0" },
+  });
+  const toolInput = { file_path: "/tmp/no-elicitation.txt", content: "must remain unapproved" };
+  const response = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id, actionType: "file.write", toolName: "Write", toolInput,
+      reason: "Verify missing elicitation support fails closed and is auditable.",
+    },
+  });
+  assert.equal(response.error, undefined);
+  const result = JSON.parse(response.result.content[0].text);
+  assert.equal(result.approved, false);
+  assert.equal(result.blocked, true);
+  assert.match(result.reason, /elicitation was unavailable or failed/i);
+
+  const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.equal(ledger.approvals.some((item) => item.outcome === "approved" && item.status === "active"), false);
+  assert.equal(ledger.approvals.some((item) => item.outcome === "denied" && item.actionType === "file.write"), true);
+  assert.equal((await runHook(cwd, "Write", toolInput)).hookSpecificOutput.permissionDecision, "deny");
+});
+
 test("MCP bridge recovers persisted workflow state after server restart", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-recovery-"));
   let client = startClient(cwd);
@@ -865,8 +909,16 @@ test("MCP bridge does not create a native action approval when elicitation times
       reason: "Verify a missing human response fails closed.",
     },
   });
-  assert.equal(response.result?.isError, true);
-  assert.match(response.result.content?.[0]?.text ?? "", /timed out/i);
+  assert.equal(response.error, undefined);
+  assert.equal(response.result?.isError, undefined);
+  const result = JSON.parse(response.result.content[0].text);
+  assert.equal(result.approved, false);
+  assert.equal(result.blocked, true);
+  assert.match(result.reason, /elicitation was unavailable or failed/i);
+
+  const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.equal(ledger.approvals.some((item) => item.outcome === "approved" && item.status === "active"), false);
+  assert.equal(ledger.approvals.some((item) => item.outcome === "denied" && item.actionType === "file.write"), true);
 
   const hookResult = await runHook(cwd, "Write", toolInput);
   assert.equal(hookResult.hookSpecificOutput.permissionDecision, "deny");
