@@ -21,6 +21,13 @@ type JsonObject = Record<string, unknown>;
 type RpcMessage = { jsonrpc: "2.0"; id?: string | number | null; method?: string; params?: JsonObject; result?: unknown; error?: { code: number; message: string } };
 type ElicitationAction = "accept" | "decline" | "cancel";
 
+class ParentRequestCancelledError extends Error {
+  constructor() {
+    super("The host cancelled the parent tool call; approval was not granted.");
+    this.name = "ParentRequestCancelledError";
+  }
+}
+
 const TOOLS = [
   { name: "factory_session_create", description: "Create a persisted factory workflow session.", inputSchema: { type: "object", properties: { requestId: { type: "string", minLength: 1 } }, required: ["requestId"], additionalProperties: false } },
   { name: "factory_session_get", description: "Read a workflow session, its revision, audit events, steps and evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
@@ -223,7 +230,11 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         let response: { action: ElicitationAction; content?: JsonObject };
         try {
           response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
-        } catch {
+        } catch (error) {
+          // Parent cancellation is a control-flow signal, not an elicitation
+          // failure. Preserve the JSON-RPC tool error and never write a late
+          // denial decision for a request the host has already cancelled.
+          if (error instanceof ParentRequestCancelledError) throw error;
           // Missing host support, timeout, or transport failure is a denial,
           // not an approval-shaped success or an opaque tool-call error.
           // If this audit write fails, propagate it and remain fail-closed.
@@ -447,7 +458,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         for (const [elicitationId, request] of pending) {
           if (request.parentRequestId === cancelledRequestId) {
             pending.delete(elicitationId);
-            request.reject(new Error("The host cancelled the parent tool call; approval was not granted."));
+            request.reject(new ParentRequestCancelledError());
           }
         }
         return;
