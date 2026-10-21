@@ -1178,6 +1178,7 @@ test("MCP bridge blocks interrupted-step retry when host reconciliation is decli
   };
   await writeFile(statePath, JSON.stringify(stored, null, 2), { mode: 0o600 });
 
+  client.setElicitationDecision("none");
   const clientCall = client.tool("factory_step_reconcile", {
     runId: created.run.id, stepId: "uncertain-step", resolution: "retry",
     reason: "External effects are not yet confirmed.",
