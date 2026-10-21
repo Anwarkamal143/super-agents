@@ -24,16 +24,16 @@ function run(reportPath) {
 async function completedReport({ status = "PASS", overall = "PASS", missingEvidenceFor = -1 } = {}) {
   let report = await readFile(templatePath, "utf8");
   report = report
-    .replace(/^- Status: \*\*NOT RUN\*\*$/gm, \`- Status: **\${status}**\`)
+    .replace(/^- Status: \*\*NOT RUN\*\*$/gm, "- Status: **" + status + "**")
     .replace(/^- Observed:.*$/gm, "- Observed: The expected behavior was observed during this check.")
     .replace(/^- Evidence(?: \([^)]*\))?:.*$/gm, "- Evidence: https://example.test/evidence");
 
   if (missingEvidenceFor > 0) {
-    const sectionPattern = new RegExp(\`(^### \${missingEvidenceFor}\\\\. [\\\\s\\\\S]*?^- Evidence:)[^\\\\n]*\`, "m");
+    const sectionPattern = new RegExp("(^### " + missingEvidenceFor + "\\\\. [\\\\s\\\\S]*?^- Evidence:)[^\\\\n]*", "m");
     report = report.replace(sectionPattern, "$1");
   }
 
-  return report.replace(/^- Overall: \*\*NOT RUN\*\*$/m, \`- Overall: **\${overall}**\`);
+  return report.replace(/^- Overall: \*\*NOT RUN\*\*$/m, "- Overall: **" + overall + "**");
 }
 
 test("rejects the untouched template as completed evidence", async () => {
