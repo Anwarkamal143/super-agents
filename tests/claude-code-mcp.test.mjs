@@ -1774,10 +1774,10 @@ test("MCP bridge does not grant native action approval after stdin closes", asyn
   ]);
   await pending;
 
-  const approvals = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
-  assert.ok(approvals.length > 0, "disconnect should leave an auditable decision");
-  assert.equal(approvals.some((item) => item.outcome === "approved" && item.payload?.toolName === "Write" &&
-    item.payload?.toolInput?.file_path === path.join(cwd, "must-not-write.txt")), false);
+  const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.ok(ledger.events.some((item) => item.kind === "decision_recorded" && item.decisionOutcome === "denied"),
+    "disconnect should leave an auditable denial");
+  assert.equal(ledger.approvals.some((item) => item.outcome === "approved" && item.actionType === "file.write"), false);
 });
 
 test("MCP bridge does not spawn verification command when stdin closes during approval", async (t) => {
