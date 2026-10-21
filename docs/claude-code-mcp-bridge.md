@@ -113,3 +113,7 @@ In a disposable target repository and an interactive Claude Code session:
 5. Test a Bash action and confirm the exact command input is what the human approves.
 6. Test unavailable elicitation and a state-directory permission failure; both must fail closed.
 7. Record the actual observed UI, Claude Code version, commands and results. Unit tests are not a substitute for this test.
+
+## Restart and interrupted-step recovery
+
+The bridge exposes `factory_session_recover_interrupted` and `factory_step_reconcile` for operator-controlled recovery. Recovery first asks the host for explicit approval, rechecks the workflow revision and exact set of running steps, then marks those steps `interrupted`. It never retries commands automatically. Each interrupted step must be reconciled individually after inspecting whether its process or external effect completed. Confirming success/failure is a human assertion, not runner-observed evidence. Retrying requires a separate exact step/resolution/reason prompt and explicit human confirmation that replay is safe; stale state after elicitation is rejected. If host elicitation is unavailable, recovery/reconciliation is blocked.
