@@ -460,7 +460,7 @@ function isValidRunnerVerificationMetadata(value: unknown): boolean {
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(checkId) &&
     ["passed", "failed", "skipped", "timed_out", "cancelled", "blocked"].includes(String(status)) &&
     (exitCode === null || (Number.isSafeInteger(exitCode) && (exitCode as number) >= 0 && (exitCode as number) <= 255)) &&
-    Number.isSafeInteger(value["durationMs"]) && (value["durationMs"] as number) >= 0 &&
+    typeof value["durationMs"] === "number" && Number.isFinite(value["durationMs"]) && value["durationMs"] >= 0 &&
     Number.isSafeInteger(value["observedStdoutBytes"]) && (value["observedStdoutBytes"] as number) >= 0 &&
     Number.isSafeInteger(value["observedStderrBytes"]) && (value["observedStderrBytes"] as number) >= 0 &&
     typeof value["outputTruncated"] === "boolean" &&
