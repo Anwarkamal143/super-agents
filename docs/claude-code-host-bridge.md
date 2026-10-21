@@ -1,12 +1,12 @@
 # Claude Code active-session host bridge decision
 
-**Status:** Proposed implementation architecture, selected by the repository owner on 2026-10-20. This document does not claim that the bridge is implemented or that the interactive host path has been smoke-tested.
+**Status:** Architecture selected by the repository owner on 2026-10-20 and implemented in the local MCP bridge. Deterministic bridge and hook tests exist; the real interactive Claude Code host smoke test remains **NOT RUN / UNVERIFIED**. Do not interpret implementation or CI success as proof of installed-host compatibility.
 
 ## Decision
 
 Preserve the **currently active Claude Code session** as the only model orchestrator. Use a local Model Context Protocol (MCP) server as a narrow state-and-approval bridge. Do not start a second Claude CLI process to perform the main workflow.
 
-The current `runFactoryWorkflow` composition is a single asynchronous function with an `implementApprovedPlan` callback. That callback model does not fit the active-session control flow: while an MCP tool call is waiting inside the function, the active model cannot be handed the implementation task and then resume the same call with its result. The host bridge therefore needs an incremental, persisted workflow session API. Shared domain and approval invariants should be reused; safety logic must not be duplicated in an unrelated adapter.
+The current `runFactoryWorkflow` composition is a single asynchronous function with an `implementApprovedPlan` callback. That callback model does not fit the active-session control flow: while an MCP tool call is waiting inside the function, the active model cannot be handed the implementation task and then resume the same call with its result. The host bridge therefore uses an incremental, persisted workflow-session API. The implemented bridge reuses the existing domain, state, approval, evidence, and recovery contracts where appropriate.
 
 ## Why MCP is the leading bridge
 
@@ -14,7 +14,7 @@ Claude Code documents MCP servers/tools and MCP elicitation for asking the user 
 
 Hooks are useful defense-in-depth, particularly when blocking selected tool calls, but are not sufficient as the primary bridge. A command hook communicates through process I/O and cannot directly call a new tool or resume the active model's orchestration. A tool server gives the active session explicit, typed operations and a place to own persisted state transitions.
 
-**Important:** documentation establishes that the host/protocol has relevant primitives; it does not prove that this repository's eventual MCP server is correctly configured or that a real human approval interaction works. A manual interactive smoke test remains mandatory.
+**Important:** the bridge is implemented and its deterministic tests exercise simulated host behavior, but this does not prove the server is correctly configured in a user's installed Claude Code version or that a real human approval interaction works. A manual interactive smoke test remains mandatory and is currently unverified.
 
 ## Control flow
 
@@ -39,9 +39,9 @@ flowchart TD
 
 The MCP server does not run the model implementation callback. The active session performs model-driven work and reports structured evidence. The server validates allowed transitions, approval payloads, and evidence shape; it cannot independently prove that a model's claimed test output is genuine unless the check is run by a trusted execution boundary and its result is captured there.
 
-## Proposed MCP tool surface
+## Implemented MCP tool surface
 
-Keep tools narrow and phase-oriented. Names below are design names, not shipped APIs.
+The bridge exposes the following phase-oriented tools:
 
 | Tool | Purpose | Required invariant |
 | --- | --- | --- |
@@ -53,7 +53,7 @@ Keep tools narrow and phase-oriented. Names below are design names, not shipped 
 | `factory_evidence_submit` | Record verification/review evidence from the active session or trusted runner | Schema-check; mark source and trust level; never promote unverified claims to trusted execution evidence |
 | `factory_delivery_status` | Report whether gates passed and human delivery review is pending | Must not create PRs, merge, deploy, or publish |
 
-The implementation may consolidate or rename these tools after inspecting the MCP TypeScript SDK API and actual Claude Code client behavior. Avoid a generic `execute_anything` tool or an MCP endpoint that accepts arbitrary shell commands.
+The public tool surface is implemented. Actual compatibility with the installed Claude Code client remains unverified until the interactive smoke test is run. The bridge intentionally has no generic arbitrary-shell execution tool.
 
 ## Human approval contract
 
@@ -74,9 +74,9 @@ Elicitation responses are user input, not inherently trustworthy authorization t
 - The local MCP server should bind to the narrowest supported local transport and workspace scope. Do not expose an unauthenticated network listener by default.
 - Tool arguments, repository files, issue text, subagent output, model text, and verification summaries are untrusted. Treat JSON Schema validation as shape validation, not proof of authorization or truth.
 
-## Verification plan for implementation issue
+## Verification status and remaining host acceptance
 
-### Deterministic tests (no Claude account required)
+### Deterministic tests (implemented; run in CI)
 
 - Tool input validation and strict allowlisted phase transitions.
 - Happy path through plan approval, implementation-evidence handoff, verification, review, and human-delivery-ready status.
@@ -88,7 +88,7 @@ Elicitation responses are user input, not inherently trustworthy authorization t
 - Tool handlers do not execute arbitrary shell commands, create PRs, merge, deploy, or publish.
 - Restart/recovery preserves blocked/interrupted state and audit history.
 
-### Real interactive smoke test (required before claiming the host bridge works)
+### Real interactive smoke test (NOT RUN; required before claiming the host bridge works)
 
 1. Install/configure the MCP server for a trusted local test repository using the supported Claude Code MCP configuration.
 2. Invoke `/factory` in an interactive Claude Code session and confirm the server's plan approval request visibly reaches the human.
@@ -107,4 +107,7 @@ Elicitation responses are user input, not inherently trustworthy authorization t
 
 ## Follow-up
 
-Implementation is tracked separately in [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38). The original end-to-end acceptance issue [#35](https://github.com/Anwarkamal143/super-agents/issues/35) remains open until the incremental bridge and real interactive path are implemented and verified.
+The bridge implementation, deterministic failure/recovery coverage, report template, and report validator are present in the repository. The outstanding acceptance gap is an actual interactive run against the target Claude Code installation, with the version and observed outcomes recorded in `docs/claude-code-smoke-report-template.md` and the completed report validated with `npm run validate:smoke-report -- <report-path>`. Do not fill the template with inferred or simulated observations. The bridge's local JSON state and cooperative lock are not tamper-evident or multi-host transactional, and the standalone CLI does not provide a trusted review provider by default.
+
+
+The incremental bridge implementation and deterministic coverage are recorded in [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38). The original end-to-end acceptance issue [#35](https://github.com/Anwarkamal143/super-agents/issues/35) remains open because the actual interactive Claude Code host path has not yet been observed and reported. Do not close #35 based on unit tests or simulated-host runs.
