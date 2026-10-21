@@ -149,3 +149,58 @@ test("loads legacy evidence records without provenance while validating workflow
     assert.equal("source" in restored[0].evidence[0], false);
   });
 });
+
+
+test("rejects persisted audit events that reference a different run", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("event-run"));
+    const workflows = await store.load();
+    const corrupted = structuredClone(workflows);
+    corrupted[0].events[0].runId = "another-run";
+    await writeFile(store.filePath, JSON.stringify(corrupted));
+    await assert.rejects(store.load(), /events\\[0\\] has an invalid structure/);
+  });
+});
+
+test("rejects malformed evidence fields and unknown provenance", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("evidence-run"));
+    const workflows = await store.load();
+    const corrupted = structuredClone(workflows);
+    corrupted[0].evidence.push({
+      id: "evidence-1",
+      runId: "evidence-run",
+      kind: "test",
+      outcome: "passed",
+      summary: "Test output reported as passed.",
+      observedAt: "2026-10-20T10:00:00.000Z",
+      artifactIds: ["artifact-1"],
+      source: "trusted_runner",
+    });
+    await writeFile(store.filePath, JSON.stringify(corrupted));
+    await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+  });
+});
+
+test("accepts current evidence with recognized provenance and artifact IDs", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("current-evidence"));
+    const workflows = await store.load();
+    const updated = structuredClone(workflows);
+    updated[0].evidence.push({
+      id: "evidence-current",
+      runId: "current-evidence",
+      kind: "test",
+      outcome: "passed",
+      summary: "Deterministic test suite passed.",
+      observedAt: "2026-10-20T10:00:00.000Z",
+      artifactIds: ["artifact-1"],
+      source: "runner_observed",
+    });
+    await writeFile(store.filePath, JSON.stringify(updated));
+    assert.equal((await store.load())[0].evidence[0].source, "runner_observed");
+  });
+});
