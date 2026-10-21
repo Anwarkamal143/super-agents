@@ -21,6 +21,16 @@ The `/factory` skill now instructs the active Claude Code session to use the opt
 
 The bridge is still limited to its documented MCP protocol and local state model. The real interactive Claude Code approval smoke test remains **NOT RUN** until observed and recorded using the [smoke-test report template](claude-code-smoke-report-template.md). Follow [issue #38](https://github.com/Anwarkamal143/super-agents/issues/38) and [issue #35](https://github.com/Anwarkamal143/super-agents/issues/35) for remaining host validation and end-to-end acceptance. Unit tests and skill text do not prove actual host compatibility.
 
+After an actual interactive run, keep the template as a record of observations and validate a separate completed copy:
+
+```sh
+cp docs/claude-code-smoke-report-template.md /tmp/claude-code-smoke-report.md
+# Edit the copy: replace every status and fill Observed/Evidence inline from real host observations.
+npm run validate:smoke-report -- /tmp/claude-code-smoke-report.md
+```
+
+The validator fails on missing/placeholder observations, evidence references, unknown statuses, missing check sections, and an overall PASS that conflicts with any non-PASS check. A successful validation confirms report completeness and consistency only; it does not authenticate the tester, evidence, or host behavior. The untouched template is expected to fail.
+
 ### Trusted review and delivery readiness
 
 The skill distinguishes its own model-led Standards/Spec review from trusted host review evidence. The optional MCP `factory_review_run` tool is usable only when the embedding host configures a trusted `reviewProvider` callback. The tool's `tools/list` description explicitly reports `UNAVAILABLE` when the provider is absent; the skill must not call it as an availability probe. The standalone `factory:mcp` CLI has no provider configured by default, so a passing model review alone leaves delivery readiness blocked. If the MCP request is cancelled, a late provider result is discarded even when the callback ignores its `AbortSignal`; no passing review evidence is persisted for that attempt. Cancellation cannot undo external work the provider already performed. When configured, the host provider must pin the actual diff and return a bounded structured result; the bridge validates it, hashes the reviewed diff, and persists `review_engine` evidence. Failed attempts require fresh host approval before retry, with state revalidation after elicitation and prior attempt records retained. This is a trust boundary, not cryptographic attestation or proof of authenticated reviewer identity.
