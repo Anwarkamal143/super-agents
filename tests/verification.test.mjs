@@ -349,3 +349,89 @@ test("output-limit overflow escalates to SIGKILL when a child ignores SIGTERM", 
     assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
   });
 });
+
+
+test("stdout and stderr stream errors fail the check without escaping as unhandled errors", async () => {
+  await withRoot(async (root) => {
+    for (const streamName of ["stdout", "stderr"]) {
+      const spawnProcess = (_executable, _args, _options) => {
+        const child = new EventEmitter();
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        child.kill = (signal) => {
+          if (signal === "SIGTERM") queueMicrotask(() => child.emit("close", 0));
+          return true;
+        };
+        queueMicrotask(() => {
+          child[streamName].emit("error", new Error("private stream details"));
+        });
+        return child;
+      };
+
+      const report = await runVerification(config(root, spawnProcess, {
+        checks: [{ id: streamName, kind: "command", executable: "node", args: [] }],
+      }));
+      assert.equal(report.status, "failed");
+      assert.equal(report.checks[0].status, "failed");
+      assert.equal(report.checks[0].reason, "Verification output stream failed.");
+    }
+  });
+});
+
+test("termination escalation is attempted after SIGTERM throws or returns false", async () => {
+  await withRoot(async (root) => {
+    for (const mode of ["throws", "false"]) {
+      const calls = [];
+      const spawnProcess = (_executable, _args, _options) => {
+        const child = new EventEmitter();
+        child.stdout = new PassThrough();
+        child.stderr = new PassThrough();
+        child.kill = (signal) => {
+          calls.push(signal);
+          if (signal === "SIGTERM") {
+            if (mode === "throws") throw new Error("signal failed");
+            return false;
+          }
+          queueMicrotask(() => child.emit("close", null));
+          return true;
+        };
+        queueMicrotask(() => child.stdout.emit("error", new Error("stream broke")));
+        return child;
+      };
+
+      const report = await runVerification(config(root, spawnProcess, {
+        checks: [{ id: mode, kind: "command", executable: "node", args: [], timeoutMs: 1000 }],
+      }));
+      assert.equal(report.status, "failed");
+      assert.equal(report.checks[0].status, "failed");
+      assert.equal(report.checks[0].reason, "Verification output stream failed.");
+      assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
+    }
+  });
+});
+
+test("failed SIGKILL attempt settles as failed instead of hanging forever", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        if (signal === "SIGKILL") throw new Error("signal failed");
+        return true;
+      };
+      queueMicrotask(() => child.stderr.emit("error", new Error("stream broke")));
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [{ id: "unconfirmed-termination", kind: "command", executable: "node", args: [], timeoutMs: 1000 }],
+    }));
+    assert.equal(report.status, "failed");
+    assert.equal(report.checks[0].status, "failed");
+    assert.equal(report.checks[0].reason, "Verification output stream failed.");
+    assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
+  });
+});
