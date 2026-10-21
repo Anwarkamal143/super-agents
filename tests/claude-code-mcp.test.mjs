@@ -76,6 +76,10 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     return promise;
   };
   const sendRaw = (message) => child.stdin.write(JSON.stringify(message) + "\n");
+  const sendRawText = (raw, chunkSize = 32768) => {
+    for (let offset = 0; offset < raw.length; offset += chunkSize) child.stdin.write(raw.slice(offset, offset + chunkSize));
+    child.stdin.write("\n");
+  };
   const nextElicitation = () => elicitationQueue.length
     ? Promise.resolve(elicitationQueue.shift())
     : new Promise((resolve) => elicitationWaiters.push(resolve));
@@ -102,7 +106,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, sendRaw, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
+  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -231,6 +235,40 @@ test("MCP bridge rejects unsupported protocol negotiation", async (t) => {
   });
   assert.equal(response.error.code, -32602);
   assert.match(response.error.message, /supports only MCP protocol 2025-11-25/);
+});
+
+test("MCP bridge bounds oversized input frames and resumes at the next newline", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-oversized-frame-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const oversized = JSON.stringify({
+    jsonrpc: "2.0",
+    id: 77,
+    method: "tools/call",
+    params: {
+      name: "factory_session_create",
+      arguments: { requestId: "must-not-be-created" },
+      padding: "x".repeat(1_048_600),
+    },
+  });
+  client.sendRawText(oversized, 16_384);
+
+  // The oversized frame is discarded through its newline; a subsequent valid
+  // request proves the parser recovers instead of poisoning the input stream.
+  const initialized = await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  assert.equal(initialized.result.serverInfo.name, "super-agents-factory-bridge");
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+
+  const created = await client.tool("factory_session_create", { requestId: "valid-after-oversized-frame" });
+  assert.equal(created.run.status, "created");
 });
 
 test("MCP bridge rejects malformed JSON-RPC envelopes before dispatch", async (t) => {
