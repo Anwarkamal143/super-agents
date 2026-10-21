@@ -291,6 +291,8 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let child: ChildProcess | undefined;
   let resolveResult: ((value: VerificationEvidenceRecord) => void) | undefined;
   let cancelListener: (() => void) | undefined;
+  let stdoutDataListener: ((chunk: Buffer) => void) | undefined;
+  let stderrDataListener: ((chunk: Buffer) => void) | undefined;
   let stdoutErrorListener: (() => void) | undefined;
   let stderrErrorListener: (() => void) | undefined;
 
@@ -301,8 +303,15 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     if (timer) clearTimeout(timer);
     if (killTimer) clearTimeout(killTimer);
     if (cancelListener) signal?.removeEventListener("abort", cancelListener);
+    if (stdoutDataListener) child?.stdout?.removeListener("data", stdoutDataListener);
+    if (stderrDataListener) child?.stderr?.removeListener("data", stderrDataListener);
     if (stdoutErrorListener) child?.stdout?.removeListener("error", stdoutErrorListener);
     if (stderrErrorListener) child?.stderr?.removeListener("error", stderrErrorListener);
+    // A forced settlement can happen without a child close event. Release our
+    // stdio streams in every completion path so retained pipes/listeners do not
+    // outlive the verification result. This does not prove OS process exit.
+    if (child?.stdout && !child.stdout.destroyed) child.stdout.destroy();
+    if (child?.stderr && !child.stderr.destroyed) child.stderr.destroy();
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
       spawnError || executionError || outputLimitExceeded || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
@@ -406,8 +415,10 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     if (target === "stdout") stdout += accepted.toString("utf8");
     else stderr += accepted.toString("utf8");
   };
-  child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
-  child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
+  stdoutDataListener = (chunk: Buffer) => collect(chunk, "stdout");
+  stderrDataListener = (chunk: Buffer) => collect(chunk, "stderr");
+  child.stdout?.on("data", stdoutDataListener);
+  child.stderr?.on("data", stderrDataListener);
   stdoutErrorListener = () => stop("stream_error");
   stderrErrorListener = () => stop("stream_error");
   child.stdout?.on("error", stdoutErrorListener);
