@@ -1631,6 +1631,53 @@ test("PreToolUse hook denies malformed persisted workflow state without consumin
 });
 
 
+test("MCP bridge ignores JSON-RPC batch frames without dispatching contained mutations", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-batch-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  client.sendRaw([
+    {
+      jsonrpc: "2.0",
+      id: "batch-initialize",
+      method: "initialize",
+      params: {
+        protocolVersion: "2025-11-25",
+        capabilities: { elicitation: { form: {} } },
+        clientInfo: { name: "batch-client", version: "1.0.0" },
+      },
+    },
+    {
+      jsonrpc: "2.0",
+      id: "batch-create",
+      method: "tools/call",
+      params: {
+        name: "factory_session_create",
+        arguments: { requestId: "must-not-be-created-from-batch" },
+      },
+    },
+  ]);
+
+  // A following single request acts as a stream-ordering barrier: its response
+  // proves the preceding batch frame was consumed before we inspect persisted state.
+  const initialized = await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "single-request-client", version: "1.0.0" },
+  });
+  assert.equal(initialized.result.protocolVersion, "2025-11-25");
+  await assert.rejects(
+    readFile(path.join(cwd, ".factory-state", "workflows.json")),
+    { code: "ENOENT" },
+    "a JSON-RPC batch must not initialize the session or dispatch its contained tool call",
+  );
+  const created = await client.tool("factory_session_create", { requestId: "single-request-after-batch" });
+  assert.equal(created.run.status, "created");
+});
+
 test("MCP bridge rejects tool calls before initialization without persisting workflow state", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-preinit-"));
   const client = startClient(cwd);
