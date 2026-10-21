@@ -1773,7 +1773,7 @@ test("MCP bridge does not grant native action approval after stdin closes", asyn
     closed,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Bridge did not exit promptly after action approval disconnect.")), 1500)),
   ]);
-  await pending;
+  // The disconnected caller cannot receive a response; keep its timeout rejection handled above.
 
   const ledger = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
   assert.ok(ledger.events.some((item) => item.kind === "decision_recorded" && item.decisionOutcome === "denied"),
@@ -1828,7 +1828,7 @@ test("MCP bridge does not spawn verification command when stdin closes during ap
     closed,
     new Promise((_, reject) => setTimeout(() => reject(new Error("Bridge did not exit promptly after verification disconnect.")), 1500)),
   ]);
-  await pending;
+  // The disconnected caller cannot receive a response; keep its timeout rejection handled above.
 
   await assert.rejects(readFile(path.join(cwd, "disconnect-check-ran.txt")), { code: "ENOENT" });
   const state = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
