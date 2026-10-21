@@ -1478,7 +1478,9 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   const closed = new Promise((resolve) => client.child.once("close", resolve));
   client.child.kill("SIGTERM");
   await closed;
+  let providerCalls = 0;
   const embedded = startEmbeddedClient(path.join(cwd, ".factory-state"), async (request) => {
+    providerCalls += 1;
     assert.equal(request.runId, created.run.id);
     assert.equal(request.workflowRevision, transitioned.run.revision);
     assert.equal(request.repositoryRoot, process.cwd());
@@ -1491,8 +1493,6 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     };
   });
   await embedded.initialize();
-  let providerCalls = 0;
-  // Rebind the test server's provider invocation count through the configured callback contract.
   // Unknown model-supplied provenance fields must be rejected by the advertised schema.
   const spoof = await embedded.request("tools/call", {
     name: "factory_review_run",
@@ -1503,7 +1503,6 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     runId: created.run.id,
     expectedRevision: transitioned.run.revision,
   });
-  providerCalls += 1;
   assert.equal(providerCalls, 1);
   assert.equal(review.status, "passed");
   assert.equal(review.evidenceSource, "review_engine");
