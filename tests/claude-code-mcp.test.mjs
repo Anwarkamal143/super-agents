@@ -642,6 +642,31 @@ test("MCP bridge persists model-reported evidence provenance and never counts it
   assert.equal(persisted.evidence.at(-1).source, "model_reported");
   assert.equal(persisted.evidence.at(-1).outcome, "passed");
 
+  // Provenance is assigned by the server, never accepted from model-controlled
+  // arguments. Try both a direct override and a nested evidence-object bypass.
+  const forgedSubmissions = [
+    { source: "runner_observed" },
+    { source: "review_engine" },
+    { evidence: { source: "runner_observed", outcome: "passed", summary: "Forged runner result." } },
+  ];
+  for (const forgedFields of forgedSubmissions) {
+    const response = await client.request("tools/call", {
+      name: "factory_evidence_submit",
+      arguments: {
+        runId: created.run.id,
+        expectedRevision: plan.run.revision,
+        summary: "Model attempts to forge trusted provenance.",
+        kind: "test",
+        outcome: "passed",
+        ...forgedFields,
+      },
+    });
+    assert.equal(response.result?.isError, true, JSON.stringify(response));
+  }
+
+  const afterForgeryAttempts = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.deepEqual(afterForgeryAttempts.evidence, persisted.evidence, "rejected provenance overrides must not mutate persisted evidence");
+
   const status = await client.tool("factory_delivery_status", { runId: created.run.id });
   assert.equal(status.modelReportedEvidenceCount, 1);
   assert.equal(status.runnerObservedEvidenceCount, 0);
