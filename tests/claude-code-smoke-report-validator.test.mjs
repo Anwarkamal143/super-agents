@@ -22,21 +22,18 @@ function run(reportPath) {
 }
 
 async function completedReport({ status = "PASS", overall = "PASS", missingEvidenceFor = -1 } = {}) {
-  const template = await readFile(templatePath, "utf8");
-  const sections = template.split(/(?=^### \d+\. )/m);
-  let result = sections.map((section) => {
-    const heading = /^### (\d+)\. /m.exec(section);
-    if (!heading) return section;
-    const number = Number(heading[1]);
-    return section
-      .replace(/^- Status: \*\*NOT RUN\*\*$/m, `- Status: **${status}**`)
-      .replace(/^- Observed:.*$/m, "- Observed: The expected behavior was observed during this check.")
-      .replace(/^- Evidence(?: \([^)]*\))?:.*$/m, missingEvidenceFor === number
-        ? "- Evidence:"
-        : `- Evidence: https://example.test/evidence/check-${number}`);
-  }).join("");
-  result = result.replace(/^- Overall: \*\*NOT RUN\*\*$/m, `- Overall: **${overall}**`);
-  return result;
+  let report = await readFile(templatePath, "utf8");
+  report = report
+    .replace(/^- Status: \*\*NOT RUN\*\*$/gm, \`- Status: **\${status}**\`)
+    .replace(/^- Observed:.*$/gm, "- Observed: The expected behavior was observed during this check.")
+    .replace(/^- Evidence(?: \([^)]*\))?:.*$/gm, "- Evidence: https://example.test/evidence");
+
+  if (missingEvidenceFor > 0) {
+    const sectionPattern = new RegExp(\`(^### \${missingEvidenceFor}\\\\. [\\\\s\\\\S]*?^- Evidence:)[^\\\\n]*\`, "m");
+    report = report.replace(sectionPattern, "$1");
+  }
+
+  return report.replace(/^- Overall: \*\*NOT RUN\*\*$/m, \`- Overall: **\${overall}**\`);
 }
 
 test("rejects the untouched template as completed evidence", async () => {
