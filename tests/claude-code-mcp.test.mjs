@@ -72,7 +72,13 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     const requestId = ++id;
     let timer;
     const promise = new Promise((resolve, reject) => {
-      waiting.set(String(requestId), (message) => { clearTimeout(timer); resolve(message); });
+      waiting.set(String(requestId), (message) => {
+        clearTimeout(timer);
+        if (method === "initialize" && message.result) {
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\\n");
+        }
+        resolve(message);
+      });
       child.stdin.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params, ...envelope }) + "\n");
       timer = setTimeout(() => {
         waiting.delete(String(requestId));
@@ -1605,4 +1611,60 @@ test("PreToolUse hook denies malformed persisted workflow state without consumin
   await writeFile(statePath, validState, { mode: 0o600 });
   const allowedAfterRestore = await runHook(cwd, "Write", toolInput);
   assert.deepEqual(allowedAfterRestore, {});
+});
+
+
+test("MCP bridge rejects tool calls before initialization without persisting workflow state", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-preinit-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  const response = await client.request("tools/call", {
+    name: "factory_session_create",
+    arguments: { requestId: "must-not-exist-before-init" },
+  });
+  assert.equal(response.error.code, -32002);
+  await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
+
+  const initialized = await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  assert.equal(initialized.result.protocolVersion, "2025-11-25");
+  const created = await client.tool("factory_session_create", { requestId: "created-after-init" });
+  assert.equal(created.run.status, "created");
+});
+
+test("MCP bridge rejects duplicate initialize without resetting negotiated capabilities", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-duplicate-init-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const duplicate = await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: {},
+    clientInfo: { name: "duplicate-client", version: "2.0.0" },
+  });
+  assert.equal(duplicate.error.code, -32600);
+  assert.match(duplicate.error.message, /only be called once/);
+
+  const created = await client.tool("factory_session_create", { requestId: "still-initialized" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "The first negotiated elicitation capability remains active.",
+  });
+  assert.equal(plan.approved, true);
 });

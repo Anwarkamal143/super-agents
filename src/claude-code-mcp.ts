@@ -68,6 +68,8 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   const output = options.output ?? process.stdout;
 
   let nextId = 0;
+  let initializeAccepted = false;
+  let initialized = false;
   let clientElicitation = false;
   const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
   const requestControllers = new Map<string | number, AbortController>();
@@ -442,6 +444,10 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           message.method !== "notifications/initialized" &&
           message.method !== "notifications/cancelled") return;
       if (message.method === "initialize") {
+        if (initializeAccepted || initialized) {
+          send({ jsonrpc: "2.0", id: message.id, error: { code: -32600, message: "Initialize may only be called once per MCP connection." } });
+          return;
+        }
         const capabilities = message.params?.["capabilities"] as JsonObject | undefined;
         const requestedProtocol = message.params?.["protocolVersion"];
         if (requestedProtocol !== "2025-11-25") {
@@ -449,10 +455,20 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           return;
         }
         clientElicitation = Boolean(capabilities?.["elicitation"] && typeof capabilities["elicitation"] === "object" && (capabilities["elicitation"] as JsonObject)["form"]);
+        initializeAccepted = true;
         send({ jsonrpc: "2.0", id: message.id, result: { protocolVersion: "2025-11-25", capabilities: { tools: { listChanged: false } }, serverInfo: { name: "super-agents-factory-bridge", version: "0.1.0" }, instructions: "The active Claude Code session is the orchestrator. This server supports only MCP 2025-11-25 elicitation. Elicitation absence or failure blocks approvals. Configure the PreToolUse gate to prevent direct native-tool bypass." } });
         return;
       }
-      if (message.method === "notifications/initialized") return;
+      if (message.method === "notifications/initialized") {
+        if (initializeAccepted) initialized = true;
+        return;
+      }
+      if (!initialized && message.method !== "notifications/cancelled") {
+        if (message.id !== undefined) {
+          send({ jsonrpc: "2.0", id: message.id, error: { code: -32002, message: "Server not initialized; complete the MCP initialize handshake first." } });
+        }
+        return;
+      }
       if (message.method === "notifications/cancelled") {
         const cancelledRequestId = message.params?.["requestId"];
         if ((typeof cancelledRequestId === "string" || typeof cancelledRequestId === "number") && requestControllers.has(cancelledRequestId)) {
