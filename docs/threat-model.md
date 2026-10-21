@@ -33,7 +33,7 @@ Security objectives:
 2. **Discovery versus execution:** discovery reports declared scripts and reads bounded instruction files; it does not execute discovered scripts.
 3. **Portable core versus harness:** adapter invocation is an explicit boundary. Prompts must be passed as arguments or stdin, never shell-interpolated.
 4. **Proposal versus consequential action:** approval binds a known action type to a canonical payload digest. The trusted human decision endpoint is outside this package.
-5. **Check configuration versus process execution:** verification uses an explicit absolute executable allowlist, exact-command authorization, `shell: false`, workspace-contained working directories, bounded output, timeouts, and environment-key allowlists.
+5. **Check configuration versus process execution:** verification uses an explicit absolute executable allowlist, exact-command authorization, `shell: false`, workspace-contained working directories, bounded output, timeouts, environment-key allowlists, and fail-closed handling for stdout/stderr stream errors. If termination signals fail, the runner reports an unconfirmed termination as failed rather than passing; it cannot guarantee that an operating-system process is gone when the host denies or fails termination.
 6. **Review output versus acceptance:** standards and spec reviewers return untrusted structured output; schemas and pinned diff context are validated before aggregation.
 7. **Local persistence versus distributed service:** JSON stores and cooperative file locks are local persistence primitives, not distributed consensus or database transactions.
 
