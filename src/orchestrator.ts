@@ -441,7 +441,7 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
           (item["source"] !== undefined && !["model_reported", "runner_observed", "review_engine"].includes(String(item["source"]))) ||
           (item["runner"] !== undefined && (
             item["source"] !== "runner_observed" ||
-            !isValidRunnerVerificationMetadata(item["runner"])
+            !isValidRunnerVerificationMetadata(item["runner"], item["outcome"])
           ))) {
         throw new TypeError(`${label}.evidence[${evidenceIndex}] has an invalid structure.`);
       }
@@ -450,13 +450,25 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
   return value as PersistedWorkflow[];
 }
 
-function isValidRunnerVerificationMetadata(value: unknown): boolean {
+function isValidRunnerVerificationMetadata(value: unknown, evidenceOutcome: unknown): boolean {
   if (!isRecord(value)) return false;
+  const allowedKeys = new Set([
+    "checkId", "status", "exitCode", "durationMs", "observedStdoutBytes",
+    "observedStderrBytes", "outputTruncated", "stdoutDigest", "stderrDigest", "reason",
+  ]);
+  if (Object.keys(value).some((key) => !allowedKeys.has(key))) return false;
+
   const checkId = value["checkId"];
   const status = value["status"];
   const exitCode = value["exitCode"];
   const reason = value["reason"];
-  return typeof checkId === "string" &&
+  const expectedOutcome = status === "passed" ? "passed"
+    : status === "failed" || status === "timed_out" ? "failed"
+      : status === "skipped" ? "skipped"
+        : status === "cancelled" || status === "blocked" ? "unknown" : undefined;
+  return expectedOutcome !== undefined &&
+    evidenceOutcome === expectedOutcome &&
+    typeof checkId === "string" &&
     /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/.test(checkId) &&
     ["passed", "failed", "skipped", "timed_out", "cancelled", "blocked"].includes(String(status)) &&
     (exitCode === null || (Number.isSafeInteger(exitCode) && (exitCode as number) >= 0 && (exitCode as number) <= 255)) &&

@@ -288,6 +288,68 @@ test("rejects malformed structured runner verification metadata", async () => {
   });
 });
 
+test("strictly validates runner metadata keys and status/outcome consistency", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("strict-runner-metadata"));
+    const baseline = await store.load();
+    const statuses = [
+      ["passed", "passed"],
+      ["failed", "failed"],
+      ["timed_out", "failed"],
+      ["skipped", "skipped"],
+      ["cancelled", "unknown"],
+      ["blocked", "unknown"],
+    ];
+
+    const makeEvidence = (status, outcome) => ({
+      id: `runner-${status}-${outcome}`,
+      runId: "strict-runner-metadata",
+      source: "runner_observed",
+      kind: "test",
+      outcome,
+      summary: `Runner observed ${status}.`,
+      observedAt: "2026-10-20T10:00:00.000Z",
+      artifactIds: [],
+      runner: {
+        checkId: "fixture-check",
+        status,
+        exitCode: status === "passed" ? 0 : null,
+        durationMs: 5.25,
+        observedStdoutBytes: 7,
+        observedStderrBytes: 0,
+        outputTruncated: false,
+        stdoutDigest: "a".repeat(64),
+        stderrDigest: "b".repeat(64),
+      },
+    });
+
+    for (const [status, expectedOutcome] of statuses) {
+      const valid = structuredClone(baseline);
+      valid[0].evidence.push(makeEvidence(status, expectedOutcome));
+      await writeFile(store.filePath, JSON.stringify(valid));
+      const loaded = await store.load();
+      assert.equal(loaded[0].evidence[0].runner.status, status);
+      assert.equal(loaded[0].evidence[0].outcome, expectedOutcome);
+
+      for (const outcome of ["passed", "failed", "skipped", "unknown"]) {
+        if (outcome === expectedOutcome) continue;
+        const contradictory = structuredClone(baseline);
+        contradictory[0].evidence.push(makeEvidence(status, outcome));
+        await writeFile(store.filePath, JSON.stringify(contradictory));
+        await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+      }
+    }
+
+    const withUnexpectedField = structuredClone(baseline);
+    const unexpected = makeEvidence("passed", "passed");
+    unexpected.runner.rawStdout = "must not be accepted";
+    withUnexpectedField[0].evidence.push(unexpected);
+    await writeFile(store.filePath, JSON.stringify(withUnexpectedField));
+    await assert.rejects(store.load(), /evidence\\[0\\] has an invalid structure/);
+  });
+});
+
 test("rejects runner metadata attached to model-reported evidence", async () => {
   await withStore(async (store) => {
     const orchestrator = new WorkflowOrchestrator(store);
