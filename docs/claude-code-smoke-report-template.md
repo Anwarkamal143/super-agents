@@ -25,7 +25,7 @@ Use exactly one status for every check:
 - **BLOCKED** — a dependency or environment issue prevented the check.
 - **NOT RUN** — no attempt was made.
 
-Each status must include an observation and evidence reference. Do not mark a check PASS from unit tests alone.
+Each status must include an inline observation and evidence reference on the corresponding `Observed:` and `Evidence:` lines. Do not mark a check PASS from unit tests alone. After recording actual host results, validate a copy of this report with `npm run validate:smoke-report -- path/to/completed-report.md`. The validator checks completeness and status consistency only; it cannot authenticate observations.
 
 ## Checks
 
@@ -33,69 +33,60 @@ Each status must include an observation and evidence reference. Do not mark a ch
 
 - Status: **NOT RUN**
 - Expected: Claude Code connects to the configured MCP server without protocol/elicitation errors.
-- Observed:
-- Evidence (sanitized logs or screenshot reference):
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 2. Human declines plan approval
 
 - Status: **NOT RUN**
 - Expected: A visible human decision prompt appears; choosing **decline** leaves the run blocked/cancelled and no implementation phase starts.
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 3. Human approves plan and active session resumes
 
 - Status: **NOT RUN**
 - Expected: A fresh run displays the plan for approval; after approval, the currently active Claude Code session continues. No second `claude` orchestration process is launched.
-- Observed:
-- Evidence (include process observation if checked):
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 4. Exact harmless fixture write
 
 - Status: **NOT RUN**
 - Expected: The exact target and payload are shown for approval; only that approved payload is permitted by the PreToolUse gate.
 - Fixture target (redacted/generalized):
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 5. Modified payload denial
 
 - Status: **NOT RUN**
 - Expected: Changing any approved payload argument is denied and requires a new approval.
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 6. Replay denial
 
 - Status: **NOT RUN**
 - Expected: Reusing a consumed approval is denied.
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 7. Bash action approval
 
 - Status: **NOT RUN**
 - Expected: The exact command/tool input and working-directory context are reviewed before the governed Bash action; unapproved or modified input is denied.
 - Command summary (do not include secrets):
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 8. Elicitation unavailable or malformed
 
 - Status: **NOT RUN**
 - Expected: The workflow fails closed; no action approval is created and no governed native action is allowed.
 - How the failure was simulated:
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ### 9. State-directory/persistence failure
 
 - Status: **NOT RUN**
 - Expected: The bridge/hook reports failure and denies the governed action rather than treating missing or unreadable state as approval.
 - How the failure was simulated:
-- Observed:
-- Evidence:
-
+- Observed: <describe what you actually observed>
+- Evidence: <link or sanitized output reference>
 ## Final assessment
 
 - Overall: **NOT RUN**
