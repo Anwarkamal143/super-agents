@@ -133,6 +133,11 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
   const rootStats = await lstat(repositoryRoot);
   if (!rootStats.isDirectory()) throw new VerificationConfigError("repositoryRoot must be an existing directory.");
 
+  // Resolve every working directory before requesting approval or spawning any
+  // process. A malformed later check must not allow earlier checks to run first.
+  const resolvedCwds = await Promise.all(
+    config.checks.map((check) => resolveCheckCwd(repositoryRoot, check.cwd ?? ".")),
+  );
   const now = config.now ?? (() => new Date().toISOString());
   const id = config.id ?? randomUUID;
   const startedAt = now();
@@ -161,7 +166,7 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
     const executable = config.allowedExecutables[check.executable];
     const timeoutMs = check.timeoutMs ?? config.defaultTimeoutMs ?? DEFAULT_TIMEOUT_MS;
     const maxOutputBytes = check.maxOutputBytes ?? config.defaultMaxOutputBytes ?? DEFAULT_OUTPUT_BYTES;
-    const cwd = await resolveCheckCwd(repositoryRoot, check.cwd ?? ".");
+    const cwd = resolvedCwds[checkIndex];
     const environmentKeys = [...new Set([...(check.environmentAllowlist ?? DEFAULT_ENV_KEYS)])].sort();
     const authorizationPayload: VerificationAuthorizationPayload = {
       checkId: check.id,

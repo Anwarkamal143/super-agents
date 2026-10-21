@@ -683,3 +683,23 @@ test("verification profile bounds check count, executable map, and rejects dupli
     assert.equal(fake.calls.length, 0);
   });
 });
+
+
+test("invalid working directory in a later check is rejected before any approval or spawn", async () => {
+  await withRoot(async (root) => {
+    const fake = fakeSpawn();
+    const authorizations = [];
+    await assert.rejects(
+      runVerification(config(root, fake.spawnProcess, {
+        checks: [
+          { id: "would-run-first", kind: "test", executable: "node", args: ["first.js"] },
+          { id: "invalid-later", kind: "test", executable: "node", args: ["second.js"], cwd: "../outside" },
+        ],
+        authorize: async (_action, payload) => { authorizations.push(payload.checkId); return true; },
+      })),
+      VerificationConfigError,
+    );
+    assert.deepEqual(authorizations, []);
+    assert.equal(fake.calls.length, 0);
+  });
+});
