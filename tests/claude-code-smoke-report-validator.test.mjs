@@ -98,6 +98,22 @@ test("rejects overall PASS when any check is not PASS", async () => {
   }
 });
 
+test("rejects a report with a missing required check section", async () => {
+  const report = (await completedReport()).replace(
+    /^### 9\\. State-directory\\/persistence failure\\n[\\s\\S]*?(?=^## Final assessment)/m,
+    "",
+  );
+  const file = await reportFile(report);
+  try {
+    const result = run(file.reportPath);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Expected exactly 9 numbered check sections; found 8/);
+    assert.match(result.stderr, /Check 9: missing or out-of-order/);
+  } finally {
+    await file.cleanup();
+  }
+});
+
 test("reports missing arguments and unreadable report paths without throwing", () => {
   const missingArgument = spawnSync(process.execPath, [validator], { encoding: "utf8" });
   assert.equal(missingArgument.status, 2);
