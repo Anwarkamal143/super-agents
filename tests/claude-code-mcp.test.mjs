@@ -1371,6 +1371,7 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     expectedRevision: plan.run.revision,
   });
   assert.equal(report.status, "passed");
+  assert.equal(report.verificationRunStep.status, "succeeded");
   assert.equal(report.evidenceSource, "runner_observed");
   assert.equal(report.checks.length, 1);
   assert.equal(report.checks[0].status, "passed");
@@ -1395,10 +1396,101 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     stderrDigest: report.checks[0].stderrDigest,
   });
 
+  assert.equal(session.run.status, "verifying");
+  assert.equal(session.steps[`verification-run-${created.run.id}`].status, "succeeded");
+
   const delivery = await client.tool("factory_delivery_status", { runId: created.run.id });
   assert.equal(delivery.runnerObservedEvidenceCount, 1);
   assert.equal(delivery.runnerObservedEvidencePassed, true);
-  assert.equal(delivery.readyForHumanDelivery, false);
+  assert.equal(delivery.verificationRunStatus, "succeeded");
+  assert.equal(delivery.reviewEngineEvidencePassed, false);
+  assert.equal(delivery.readyForHumanDelivery, false, "runner success alone is not delivery readiness");
+
+  // Exercise the positive readiness path with persisted review-engine provenance.
+  const transitioned = await client.tool("factory_phase_transition", {
+    runId: created.run.id,
+    expectedRevision: session.run.revision,
+    to: "reviewing",
+  });
+  const statePath = path.join(cwd, ".factory-state", "workflows.json");
+  const persisted = JSON.parse(await readFile(statePath, "utf8"));
+  const stored = persisted.find((item) => item.run.id === created.run.id);
+  stored.evidence.push({
+    id: "review-engine-pass",
+    runId: created.run.id,
+    source: "review_engine",
+    kind: "review",
+    outcome: "passed",
+    summary: "Independent review completed without findings.",
+    observedAt: new Date().toISOString(),
+    artifactIds: [],
+  });
+  await writeFile(statePath, JSON.stringify(persisted, null, 2), { mode: 0o600 });
+  const ready = await client.tool("factory_delivery_status", { runId: created.run.id });
+  assert.equal(ready.run.status, "reviewing");
+  assert.equal(ready.reviewEngineEvidencePassed, true);
+  assert.equal(ready.readyForHumanDelivery, true);
+  assert.equal(ready.automaticDelivery, false);
+  assert.equal(transitioned.status, "reviewing");
+});
+
+test("MCP verification rejects overlapping verification attempts before spawning a second process", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-overlap-"));
+  const marker = path.join(cwd, "must-not-run-twice.txt");
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "overlap-check",
+      kind: "command",
+      executable: "node",
+      args: ["-e", "require('node:fs').appendFileSync('must-not-run-twice.txt', 'ran\\n')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", 60_000, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "runner-overlap-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "runner-overlap" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Only one verification invocation may own this workflow run.",
+  });
+  client.setElicitationDecision("none");
+  const pending = client.request("tools/call", {
+    name: "factory_verification_run",
+    arguments: { runId: created.run.id, expectedRevision: plan.run.revision },
+  });
+  const prompt = await client.nextElicitation();
+  assert.equal(prompt.method, "elicitation/create");
+
+  const active = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(active.run.status, "verifying");
+  assert.equal(active.steps[`verification-run-${created.run.id}`].status, "running");
+  const competing = await client.request("tools/call", {
+    name: "factory_verification_run",
+    arguments: { runId: created.run.id, expectedRevision: active.run.revision },
+  });
+  assert.equal(competing.result.isError, true);
+  assert.match(competing.result.content[0].text, /already_running|cannot start safely/i);
+
+  client.notifyCancelled(pending.requestId);
+  const cancelled = await pending;
+  const textResult = cancelled.result.content.find((entry) => entry.type === "text");
+  assert.equal(JSON.parse(textResult.text).checks[0].status, "cancelled");
+  await assert.rejects(readFile(marker), { code: "ENOENT" });
+  const final = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(final.run.status, "failed");
+  assert.equal(final.steps[`verification-run-${created.run.id}`].status, "failed");
 });
 
 test("MCP verification does not spawn a check when human authorization is declined", async (t) => {
