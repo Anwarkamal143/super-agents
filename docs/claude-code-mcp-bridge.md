@@ -205,7 +205,7 @@ Each configured check is persisted before the runner advances to the next check.
 - The workflow is in the `reviewing` phase.
 - The durable verification-run step succeeded.
 - At least one runner-observed evidence record exists and all runner-observed evidence outcomes passed.
-- At least one review-engine evidence record exists and all review-engine evidence outcomes passed.
+- At least one review-engine evidence record exists and the latest trusted review outcome passed. Earlier failed attempts remain in the audit history but do not override a later approved, passing review.
 - No workflow step is failed, running, or interrupted.
 - No model-reported evidence claims failure.
 
