@@ -392,6 +392,10 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   child.stdout?.on("error", stdoutErrorListener);
   child.stderr?.on("error", stderrErrorListener);
   child.once("error", (error) => {
+    if (stopRequested) {
+      executionError ??= safeError(error, "Verification process error.");
+      return;
+    }
     spawnError = safeError(error, "Verification process failed to start.");
     finish(null);
   });
