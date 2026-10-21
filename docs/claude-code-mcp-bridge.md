@@ -57,6 +57,12 @@ The workflow store validates each persisted run's required identifiers, recogniz
 
 Do not delete, reset, or hand-edit a malformed state file as an automatic recovery step. Preserve a copy, inspect it, and restore or repair it deliberately before retrying. These checks detect structural corruption, not malicious edits by a local actor who can alter both workflow and approval files; the JSON store is not tamper-evident.
 
+## Audit event and evidence validation
+
+Persisted audit events and verification evidence are validated field by field before the store returns them. Event run IDs must match their containing workflow; event status/revision fields and optional step metadata must use recognized values. Evidence must have valid identifiers, kind/outcome, observation timestamp, summary, artifact ID strings, and a recognized provenance value when present. Historical evidence without `source` remains supported.
+
+This validation checks structure and consistency only. A `runner_observed` provenance label is stored metadata, not a cryptographic attestation that a trusted runner executed the claimed check. Do not treat persisted claims as proof beyond the guarantees of the process that wrote them.
+
 ## Operator-configured verification runner
 
 The bridge can execute a verification profile through the existing bounded runner. Configure `FACTORY_VERIFICATION_PROFILE` in the MCP server process environment with operator-reviewed JSON. The profile is **not** accepted as an MCP tool argument and is never discovered from repository files.

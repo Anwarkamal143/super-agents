@@ -366,8 +366,23 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
     if (seenRunIds.has(runId)) throw new TypeError(`Workflow store contains duplicate run id: ${runId}`);
     seenRunIds.add(runId);
     const events = candidate["events"];
-    if (!Array.isArray(events) || !events.every(isRecord)) {
+    if (!Array.isArray(events)) {
       throw new TypeError(`${label}.events must be an array of objects.`);
+    }
+    for (const [eventIndex, event] of events.entries()) {
+      if (!isRecord(event) ||
+          event["runId"] !== runId ||
+          !Number.isSafeInteger(event["revision"]) || (event["revision"] as number) < 0 ||
+          !(event["from"] === null || isWorkflowStatus(event["from"])) ||
+          !isWorkflowStatus(event["to"]) ||
+          !isNonEmptyString(event["at"]) ||
+          (event["kind"] !== undefined && !["transition", "step_started", "step_finished", "step_interrupted", "step_reconciled"].includes(String(event["kind"]))) ||
+          (event["stepId"] !== undefined && !isNonEmptyString(event["stepId"])) ||
+          (event["stepStatus"] !== undefined && !["running", "succeeded", "failed", "interrupted"].includes(String(event["stepStatus"]))) ||
+          (event["actor"] !== undefined && !isNonEmptyString(event["actor"])) ||
+          (event["detailDigest"] !== undefined && !isNonEmptyString(event["detailDigest"]))) {
+        throw new TypeError(`${label}.events[${eventIndex}] has an invalid structure.`);
+      }
     }
     const steps = candidate["steps"];
     if (!isRecord(steps)) {
@@ -382,8 +397,22 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
       }
     }
     const evidence = candidate["evidence"];
-    if (!Array.isArray(evidence) || !evidence.every(isRecord)) {
+    if (!Array.isArray(evidence)) {
       throw new TypeError(`${label}.evidence must be an array of objects.`);
+    }
+    for (const [evidenceIndex, item] of evidence.entries()) {
+      if (!isRecord(item) ||
+          !isNonEmptyString(item["id"]) ||
+          item["runId"] !== runId ||
+          !["command", "test", "typecheck", "approval", "review", "other"].includes(String(item["kind"])) ||
+          !["passed", "failed", "skipped", "unknown"].includes(String(item["outcome"])) ||
+          !isNonEmptyString(item["summary"]) ||
+          !isNonEmptyString(item["observedAt"]) ||
+          !Array.isArray(item["artifactIds"]) ||
+          !item["artifactIds"].every(isNonEmptyString) ||
+          (item["source"] !== undefined && !["model_reported", "runner_observed", "review_engine"].includes(String(item["source"])))) {
+        throw new TypeError(`${label}.evidence[${evidenceIndex}] has an invalid structure.`);
+      }
     }
   }
   return value as PersistedWorkflow[];
