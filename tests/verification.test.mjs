@@ -437,6 +437,41 @@ test("failed SIGKILL attempt settles as failed instead of hanging forever", asyn
 });
 
 
+test("verification settles non-successfully when SIGKILL is sent but close never arrives", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    const authorizations = [];
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        return true;
+      };
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [
+        { id: "stuck-child", kind: "command", executable: "node", args: [], timeoutMs: 10 },
+        { id: "must-not-run", kind: "test", executable: "node", args: [], timeoutMs: 100 },
+      ],
+      authorize: async (_action, payload) => {
+        authorizations.push(payload.checkId);
+        return true;
+      },
+    }));
+
+    assert.equal(report.status, "failed");
+    assert.equal(report.checks[0].status, "timed_out");
+    assert.match(report.checks[0].reason, /timeout/i);
+    assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
+    assert.deepEqual(authorizations, ["stuck-child"]);
+    assert.deepEqual(report.checks.map((check) => check.status), ["timed_out", "skipped"]);
+  });
+});
+
 test("process error during shutdown preserves escalation and cleans stream listeners after close", async () => {
   await withRoot(async (root) => {
     const calls = [];

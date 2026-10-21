@@ -347,13 +347,22 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
         if (!sent && !settled) {
           executionError ??= "Unable to confirm verification process termination.";
           finish(null);
+          return;
         }
       } catch {
         executionError ??= "Unable to confirm verification process termination.";
         finish(null);
+        return;
       }
+
+      // A successful kill() return means the signal was sent, not that the
+      // child and its inherited stdio have closed. Bound this final wait too.
+      killTimer = setTimeout(() => {
+        if (settled) return;
+        executionError ??= "Unable to confirm verification process termination.";
+        finish(null);
+      }, 250);
     }, 250);
-    killTimer.unref();
   };
 
   if (signal?.aborted) {
