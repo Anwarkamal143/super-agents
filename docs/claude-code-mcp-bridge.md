@@ -63,6 +63,12 @@ Persisted audit events and verification evidence are validated field by field be
 
 This validation checks structure and consistency only. A `runner_observed` provenance label is stored metadata, not a cryptographic attestation that a trusted runner executed the claimed check. Do not treat persisted claims as proof beyond the guarantees of the process that wrote them.
 
+## JSON-RPC envelope validation
+
+The stdio bridge validates each parsed JSON-RPC envelope before dispatch. Requests must use `jsonrpc: "2.0"`, a non-empty method, a valid string or finite-number ID when present, and object-shaped MCP params. Invalid request envelopes with a usable ID receive `-32600 Invalid Request`; malformed IDs use a null error ID. Host elicitation responses are separately checked before they can resolve a pending approval request.
+
+Only `notifications/initialized` and `notifications/cancelled` are handled as notifications. A request-only method such as `tools/call` without an ID is ignored and never dispatched, so it cannot create a workflow or mutate persisted state without a correlatable request/response exchange. This is envelope validation for the bridge's minimal supported protocol, not a claim that the adapter implements every JSON-RPC or MCP extension.
+
 ## MCP request validation
 
 The bridge validates raw `tools/call` arguments against the server's published input schema before dispatching a tool handler. This independently enforces required fields, value types, enum membership, string bounds, non-negative safe-integer revisions, and rejection of unexpected fields where the schema sets `additionalProperties: false`. Do not rely on a client or model honoring `tools/list` schemas: malformed arguments are rejected before workflow, approval, or evidence state is mutated.
