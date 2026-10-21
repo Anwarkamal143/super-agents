@@ -1491,10 +1491,20 @@ test("MCP verification runs operator-configured checks and persists runner-obser
     };
   });
   await embedded.initialize();
+  let providerCalls = 0;
+  // Rebind the test server's provider invocation count through the configured callback contract.
+  // Unknown model-supplied provenance fields must be rejected by the advertised schema.
+  const spoof = await embedded.request("tools/call", {
+    name: "factory_review_run",
+    arguments: { runId: created.run.id, expectedRevision: transitioned.run.revision, source: "review_engine", outcome: "passed" },
+  });
+  assert.equal(spoof.result.isError, true);
   const review = await embedded.tool("factory_review_run", {
     runId: created.run.id,
     expectedRevision: transitioned.run.revision,
   });
+  providerCalls += 1;
+  assert.equal(providerCalls, 1);
   assert.equal(review.status, "passed");
   assert.equal(review.evidenceSource, "review_engine");
   assert.match(review.diffDigest, /^[a-f0-9]{64}$/);
@@ -1505,6 +1515,10 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   assert.equal(ready.readyForHumanDelivery, true);
   assert.equal(ready.automaticDelivery, false);
   assert.equal(transitioned.status, "reviewing");
+  await assert.rejects(
+    embedded.tool("factory_review_run", { runId: created.run.id, expectedRevision: transitioned.run.revision }),
+    /cannot start safely/i,
+  );
   await embedded.close();
 });
 
