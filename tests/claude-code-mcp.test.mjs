@@ -1097,3 +1097,97 @@ test("MCP bridge rejects an approval prompt when the workflow revision changes b
   const denied = await runHook(cwd, "Write", toolInput);
   assert.equal(denied.hookSpecificOutput.permissionDecision, "deny");
 });
+
+
+test("MCP bridge exposes human-gated interrupted-step recovery and never retries automatically", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-recovery-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const listed = await client.request("tools/list");
+  const toolNames = listed.result.tools.map((tool) => tool.name);
+  assert.ok(toolNames.includes("factory_session_recover_interrupted"));
+  assert.ok(toolNames.includes("factory_step_reconcile"));
+
+  const created = await client.tool("factory_session_create", { requestId: "recovery-test" });
+  const statePath = path.join(cwd, ".factory-state", "workflows.json");
+  const stored = JSON.parse(await readFile(statePath, "utf8"));
+  const record = stored.find((item) => item.run.id === created.run.id);
+  record.steps["verify-test"] = {
+    id: "verify-test", status: "running", startedAt: "2026-10-21T00:00:00.000Z", attempt: 1,
+  };
+  await writeFile(statePath, JSON.stringify(stored, null, 2), { mode: 0o600 });
+
+  client.setElicitationDecision("none");
+  const recoveryPromise = client.tool("factory_session_recover_interrupted", { runId: created.run.id });
+  const recoveryPrompt = await client.nextElicitation();
+  assert.match(recoveryPrompt.params.message, /No step will be retried/);
+  assert.match(recoveryPrompt.params.message, /verify-test/);
+  client.respondToElicitation(recoveryPrompt.id, "accept");
+  const recovery = await recoveryPromise;
+  assert.deepEqual(recovery.recovered.map((step) => step.status), ["interrupted"]);
+
+  const interrupted = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(interrupted.steps["verify-test"].status, "interrupted");
+
+  const reconciliationPromise = client.tool("factory_step_reconcile", {
+    runId: created.run.id,
+    stepId: "verify-test",
+    resolution: "retry",
+    reason: "Inspected the prior process and reconciled its effects.",
+  });
+  const retryPrompt = await client.nextElicitation();
+  assert.match(retryPrompt.params.message, /replay is safe/);
+  assert.match(retryPrompt.params.message, /verify-test/);
+  client.respondToElicitation(retryPrompt.id, "accept");
+  const reconciled = await reconciliationPromise;
+  assert.equal(reconciled.reconciled, true);
+  assert.equal(reconciled.step.status, "running");
+  assert.equal(reconciled.step.attempt, 2);
+  assert.match(reconciled.note, /does not execute the retry automatically/);
+  const final = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(final.steps["verify-test"].status, "running");
+  assert.equal(final.steps["verify-test"].attempt, 2);
+});
+
+test("MCP bridge blocks interrupted-step retry when host reconciliation is declined", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-recovery-decline-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "recovery-decline-test" });
+  const statePath = path.join(cwd, ".factory-state", "workflows.json");
+  const stored = JSON.parse(await readFile(statePath, "utf8"));
+  const record = stored.find((item) => item.run.id === created.run.id);
+  record.steps["uncertain-step"] = {
+    id: "uncertain-step", status: "interrupted", startedAt: "2026-10-21T00:00:00.000Z", attempt: 1,
+  };
+  await writeFile(statePath, JSON.stringify(stored, null, 2), { mode: 0o600 });
+
+  const clientCall = client.tool("factory_step_reconcile", {
+    runId: created.run.id, stepId: "uncertain-step", resolution: "retry",
+    reason: "External effects are not yet confirmed.",
+  });
+  const prompt = await client.nextElicitation();
+  client.respondToElicitation(prompt.id, "decline");
+  const result = await clientCall;
+  assert.equal(result.reconciled, false);
+  assert.equal(result.blocked, true);
+  const final = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(final.steps["uncertain-step"].status, "interrupted");
+  assert.equal(final.steps["uncertain-step"].attempt, 1);
+});
