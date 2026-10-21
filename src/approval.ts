@@ -365,7 +365,7 @@ function isPayloadDigest(value: unknown): value is string {
 
 function isTimestamp(value: unknown): value is string {
   return typeof value === "string" && value.trim().length > 0 &&
-    /^\\d{4}-\\d{2}-\\d{2}T\\d{2}:\\d{2}:\\d{2}\\.\\d{3}Z$/.test(value) &&
+    /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}\.\d{3}Z$/.test(value) &&
     !Number.isNaN(Date.parse(value)) && new Date(value).toISOString() === value;
 }
 
