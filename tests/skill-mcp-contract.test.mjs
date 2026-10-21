@@ -25,7 +25,7 @@ test("/factory skill wires its workflow to the opt-in MCP tools", async () => {
   assert.match(skill, /latest revision/i);
   assert.match(skill, /exact native tool name and complete tool input/i);
   assert.match(skill, /host elicitation/i);
-  assert.match(skill, /review_engine evidence/i);
+  assert.match(skill, /review_engine.*evidence/i);
   assert.match(skill, /provider is unavailable/i);
   assert.match(skill, /model-led Standards and Spec reviews/i);
   assert.match(skill, /un-enforced prompt-only mode/i);
