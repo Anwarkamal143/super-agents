@@ -251,13 +251,20 @@ export class WorkflowOrchestrator {
       return step;
     });
   }
-  async recoverInterruptedSteps(runId: string, actor: string): Promise<readonly WorkflowStepRecord[]> {
+  async recoverInterruptedSteps(runId: string, actor: string, expectedRunningStepIds?: readonly string[]): Promise<readonly WorkflowStepRecord[]> {
     return this.exclusive(async () => {
       if (!actor.trim()) throw new TypeError("Recovery actor must be non-empty.");
       const workflows = await this.readAll();
       const index = workflows.findIndex((item) => item.run.id === runId);
       if (index < 0) throw new WorkflowConflictError(`Workflow run not found: ${runId}`);
       const current = workflows[index]!;
+      if (expectedRunningStepIds) {
+        const actual = Object.values(current.steps).filter((step) => step.status === "running").map((step) => step.id).sort();
+        const expected = [...expectedRunningStepIds].sort();
+        if (JSON.stringify(actual) !== JSON.stringify(expected)) {
+          throw new WorkflowConflictError("Running steps changed during recovery approval; reload and inspect current steps.");
+        }
+      }
       const at = this.now();
       const steps: Record<string, WorkflowStepRecord> = { ...current.steps };
       const events: WorkflowEvent[] = [...current.events];
