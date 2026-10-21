@@ -58,6 +58,52 @@ test("serializes competing transitions and rejects stale revisions deterministic
   });
 });
 
+test("revision-guarded operations reject stale revisions without invoking the callback", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun({ ...makeRun(), status: "running", revision: 2 });
+    let invoked = false;
+    const result = await orchestrator.withActiveWorkflowRevision("run-1", 1, async () => {
+      invoked = true;
+    });
+    assert.deepEqual(result, { current: false });
+    assert.equal(invoked, false);
+  });
+});
+
+test("workflow transitions wait until revision-guarded approval consumption completes", async () => {
+  await withStore(async (store) => {
+    const guardedOrchestrator = new WorkflowOrchestrator(store);
+    const transitioningOrchestrator = new WorkflowOrchestrator(store);
+    await guardedOrchestrator.createRun({ ...makeRun(), status: "running" });
+
+    let signalEntered;
+    const entered = new Promise((resolve) => { signalEntered = resolve; });
+    let releaseOperation;
+    const hold = new Promise((resolve) => { releaseOperation = resolve; });
+    let transitionFinished = false;
+
+    const guarded = guardedOrchestrator.withActiveWorkflowRevision("run-1", 0, async () => {
+      signalEntered();
+      await hold;
+      return "approval-consumed";
+    });
+    await entered;
+
+    const transition = transitioningOrchestrator.transition("run-1", "verifying", 0).then((run) => {
+      transitionFinished = true;
+      return run;
+    });
+    await new Promise((resolve) => setTimeout(resolve, 75));
+    assert.equal(transitionFinished, false, "transition must remain blocked on the workflow store lock");
+
+    releaseOperation();
+    assert.deepEqual(await guarded, { current: true, value: "approval-consumed" });
+    assert.equal((await transition).revision, 1);
+    assert.equal((await guardedOrchestrator.getWorkflow("run-1"))?.run.status, "verifying");
+  });
+});
+
 test("a completed step is not started again after reload", async () => {
   await withStore(async (store) => {
     const orchestrator = new WorkflowOrchestrator(store, { now: () => "2026-10-20T10:01:00.000Z" });

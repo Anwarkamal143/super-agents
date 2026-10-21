@@ -139,6 +139,29 @@ export class WorkflowOrchestrator {
     return this.exclusive(async () => (await this.readAll()).find((item) => item.run.id === runId));
   }
 
+  /**
+   * Validate an active run revision and execute the callback while holding the
+   * same store lock used by workflow transitions. This lets callers serialize
+   * a revision-sensitive local operation with phase changes on this host.
+   */
+  async withActiveWorkflowRevision<T>(
+    runId: string,
+    expectedRevision: number,
+    operation: () => Promise<T>,
+  ): Promise<{ readonly current: false } | { readonly current: true; readonly value: T }> {
+    return this.exclusive(async () => {
+      const current = (await this.readAll()).find((item) => item.run.id === runId);
+      if (
+        !current ||
+        current.run.revision !== expectedRevision ||
+        !["running", "verifying", "reviewing"].includes(current.run.status)
+      ) {
+        return { current: false };
+      }
+      return { current: true, value: await operation() };
+    });
+  }
+
   async createRun(run: WorkflowRun): Promise<PersistedWorkflow> {
     return this.exclusive(async () => {
       const workflows = await this.readAll();
