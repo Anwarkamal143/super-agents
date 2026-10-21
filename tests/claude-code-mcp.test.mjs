@@ -1700,6 +1700,7 @@ test("MCP bridge cancels pending plan approval and exits promptly when stdin clo
     clientInfo: { name: "disconnecting-host", version: "1.0.0" },
   });
   const created = await client.tool("factory_session_create", { requestId: "stdin-close" });
+  client.setElicitationDecision("none");
   const pendingApproval = client.request("tools/call", {
     name: "factory_plan_request_approval",
     arguments: {
@@ -1746,7 +1747,7 @@ test("MCP bridge exits cleanly when stdin reaches EOF without a request", async 
 
 test("MCP bridge does not grant native action approval after stdin closes", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-action-eof-"));
-  const client = startClient(cwd, "none", 60_000);
+  const client = startClient(cwd, "accept", 60_000);
   t.after(async () => {
     client.child.kill("SIGTERM");
     await rm(cwd, { recursive: true, force: true });
@@ -1807,7 +1808,7 @@ test("MCP bridge does not spawn verification command when stdin closes during ap
       maxOutputBytes: 1024,
     }],
   };
-  const client = startClient(cwd, "none", 60_000, profile);
+  const client = startClient(cwd, "accept", 60_000, profile);
   t.after(async () => {
     client.child.kill("SIGTERM");
     await rm(cwd, { recursive: true, force: true });
