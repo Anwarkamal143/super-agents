@@ -15,10 +15,37 @@ interface HookInput {
 
 const FILE_TOOLS = new Set(["Write", "Edit", "MultiEdit", "NotebookEdit"]);
 const COMMAND_TOOL = "Bash";
+const MAX_HOOK_INPUT_BYTES = 1_048_576;
+
+/**
+ * Read at most MAX_HOOK_INPUT_BYTES of stdin before JSON parsing.
+ * A single stream chunk may already have been allocated by Node, but this
+ * reader never accumulates an unbounded sequence of chunks.
+ */
+async function readBoundedInput(input: NodeJS.ReadableStream): Promise<string | undefined> {
+  const chunks: Buffer[] = [];
+  let totalBytes = 0;
+
+  for await (const chunk of input) {
+    const byteLength = Buffer.isBuffer(chunk)
+      ? chunk.byteLength
+      : Buffer.byteLength(String(chunk));
+    if (byteLength > MAX_HOOK_INPUT_BYTES - totalBytes) return undefined;
+
+    chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(String(chunk)));
+    totalBytes += byteLength;
+  }
+
+  return Buffer.concat(chunks, totalBytes).toString("utf8");
+}
 
 async function main(): Promise<void> {
-  let raw = "";
-  for await (const chunk of process.stdin) raw += String(chunk);
+  const raw = await readBoundedInput(process.stdin);
+  if (raw === undefined) {
+    deny(`PreToolUse input exceeded the ${MAX_HOOK_INPUT_BYTES}-byte limit; governed action denied.`);
+    return;
+  }
+
   let input: HookInput;
   try {
     input = JSON.parse(raw) as HookInput;
