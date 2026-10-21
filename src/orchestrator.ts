@@ -389,9 +389,14 @@ function validatePersistedWorkflows(value: unknown[]): PersistedWorkflow[] {
       throw new TypeError(`${label}.steps must be an object keyed by step id.`);
     }
     for (const [stepId, step] of Object.entries(steps)) {
+      const status = isRecord(step) ? step["status"] : undefined;
+      const terminal = status === "succeeded" || status === "failed";
       if (!isRecord(step) || step["id"] !== stepId || !isNonEmptyString(step["id"]) ||
           !isNonEmptyString(step["startedAt"]) ||
-          !["running", "succeeded", "failed", "interrupted"].includes(String(step["status"])) ||
+          !["running", "succeeded", "failed", "interrupted"].includes(String(status)) ||
+          (step["finishedAt"] !== undefined && !isNonEmptyString(step["finishedAt"])) ||
+          (step["summary"] !== undefined && !isNonEmptyString(step["summary"])) ||
+          (terminal && (!isNonEmptyString(step["finishedAt"]) || !isNonEmptyString(step["summary"]))) ||
           (step["attempt"] !== undefined && (!Number.isSafeInteger(step["attempt"]) || (step["attempt"] as number) < 1))) {
         throw new TypeError(`${label}.steps[${JSON.stringify(stepId)}] has an invalid structure.`);
       }

@@ -204,3 +204,42 @@ test("accepts current evidence with recognized provenance and artifact IDs", asy
     assert.equal((await store.load())[0].evidence[0].source, "runner_observed");
   });
 });
+
+
+test("rejects malformed persisted step fields and terminal state mismatches", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("step-validation"));
+    await orchestrator.beginStep("step-validation", "verify");
+    await orchestrator.finishStep("step-validation", "verify", "succeeded", "checks passed");
+    const valid = await store.load();
+
+    for (const mutate of [
+      (step) => { step.finishedAt = ""; },
+      (step) => { step.summary = "  "; },
+      (step) => { step.attempt = 0; },
+      (step) => { delete step.finishedAt; },
+      (step) => { delete step.summary; },
+    ]) {
+      const corrupted = structuredClone(valid);
+      mutate(corrupted[0].steps.verify);
+      await writeFile(store.filePath, JSON.stringify(corrupted));
+      await assert.rejects(store.load(), /steps\["verify"\] has an invalid structure/);
+    }
+  });
+});
+
+test("valid running and interrupted steps remain loadable during recovery", async () => {
+  await withStore(async (store) => {
+    const orchestrator = new WorkflowOrchestrator(store);
+    await orchestrator.createRun(makeRun("step-recovery"));
+    await orchestrator.beginStep("step-recovery", "deploy");
+    assert.equal((await store.load())[0].steps.deploy.status, "running");
+
+    await orchestrator.recoverInterruptedSteps("step-recovery", "operator");
+    const restored = await store.load();
+    assert.equal(restored[0].steps.deploy.status, "interrupted");
+    assert.equal(restored[0].steps.deploy.finishedAt, undefined);
+    assert.equal(restored[0].steps.deploy.summary, undefined);
+  });
+});
