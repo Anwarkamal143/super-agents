@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -159,6 +159,57 @@ test("JSON ledger survives reload and malformed persistence fails closed", async
     const file = path.join(directory, "approvals.json");
     await import("node:fs/promises").then(({ writeFile }) => writeFile(file, '{"approvals":"bad","events":[]}'));
     await assert.rejects(new JsonFileApprovalStore(file).load(), /invalid structure/);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+});
+
+test("persisted approval and audit records are validated before policy use", async () => {
+  const directory = await mkdtemp(path.join(os.tmpdir(), "super-agents-approval-records-"));
+  try {
+    const file = path.join(directory, "approvals.json");
+    const store = new JsonFileApprovalStore(file);
+    const writer = new ApprovalPolicy(store);
+    await writer.recordDecision({
+      actionType: "command.execute",
+      payload: { command: "npm test" },
+      outcome: "approved",
+      decidedBy: "reviewer",
+      scopeId: "run-1",
+    });
+    const valid = await store.load();
+    const corruptions = [
+      (state) => { state.approvals[0].payloadDigest = "not-a-digest"; },
+      (state) => { delete state.approvals[0].decidedBy; },
+      (state) => { state.approvals[0].status = "pending"; },
+      (state) => { state.approvals[0].scopeId = "  "; },
+      (state) => { state.approvals.push({ ...state.approvals[0] }); },
+      (state) => { state.events[0].kind = "invented_event"; },
+      (state) => { state.events[0].actor = ""; },
+      (state) => { state.events[0].at = "not-a-timestamp"; },
+      (state) => { state.events.push({ ...state.events[0] }); },
+    ];
+
+    for (const corrupt of corruptions) {
+      const malformed = structuredClone(valid);
+      corrupt(malformed);
+      await writeFile(file, JSON.stringify(malformed));
+      const corruptStore = new JsonFileApprovalStore(file);
+      await assert.rejects(corruptStore.load(), /invalid structure/);
+      const policy = new ApprovalPolicy(corruptStore);
+      await assert.rejects(
+        policy.authorizeAndConsume("command.execute", { command: "npm test" }, valid.approvals[0].id, "runner"),
+        /invalid structure/,
+      );
+    }
+
+    await writeFile(file, JSON.stringify(valid));
+    const reloaded = new JsonFileApprovalStore(file);
+    assert.equal((await reloaded.load()).approvals.length, 1);
+    const policy = new ApprovalPolicy(reloaded);
+    assert.equal((await policy.authorizeAndConsume(
+      "command.execute", { command: "npm test" }, valid.approvals[0].id, "runner",
+    )).allowed, true);
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
