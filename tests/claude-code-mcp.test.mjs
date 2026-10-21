@@ -75,7 +75,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
       waiting.set(String(requestId), (message) => {
         clearTimeout(timer);
         if (method === "initialize" && message.result) {
-          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\\n");
+          child.stdin.write(JSON.stringify({ jsonrpc: "2.0", method: "notifications/initialized" }) + "\n");
         }
         resolve(message);
       });
