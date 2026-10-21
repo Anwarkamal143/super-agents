@@ -106,7 +106,7 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     assert.ok(item, JSON.stringify(response));
     return JSON.parse(item.text);
   };
-  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr };
+  return { child, request, sendRaw, sendRawText, tool, nextElicitation, respondToElicitation, notifyCancelled, setElicitationDecision: (decision) => { currentDecision = decision; }, getStderr: () => stderr, getQueuedElicitationCount: () => elicitationQueue.length };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -235,6 +235,92 @@ test("MCP bridge rejects unsupported protocol negotiation", async (t) => {
   });
   assert.equal(response.error.code, -32602);
   assert.match(response.error.message, /supports only MCP protocol 2025-11-25/);
+});
+
+test("MCP bridge rejects duplicate in-flight tool request IDs without a second invocation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-duplicate-rpc-id-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "duplicate-rpc-id" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id, expectedRevision: 0, plan: "Allow a fixture action for duplicate-ID coverage.",
+  });
+  assert.equal(plan.approved, true);
+
+  client.setElicitationDecision("none");
+  const args = {
+    runId: created.run.id, actionType: "file.write", toolName: "Write",
+    toolInput: { file_path: "/tmp/duplicate-id.txt", content: "must not be written" },
+    reason: "Verify duplicate request IDs cannot create a second approval prompt.",
+  };
+  const original = client.request("tools/call", { name: "factory_action_request_approval", arguments: args });
+  const prompt = await client.nextElicitation();
+  client.sendRaw({
+    jsonrpc: "2.0", id: original.requestId, method: "tools/call",
+    params: { name: "factory_action_request_approval", arguments: args },
+  });
+  const duplicateResponse = await original;
+  assert.equal(duplicateResponse.error?.code, -32600);
+  assert.match(duplicateResponse.error.message, /Duplicate in-flight/);
+  client.respondToElicitation(prompt.id, "decline");
+
+  await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(client.getQueuedElicitationCount(), 0, "duplicate request must not enqueue another human prompt");
+});
+
+test("MCP bridge bounds concurrent tool calls and releases capacity after they settle", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-rpc-concurrency-"));
+  const client = startClient(cwd, "accept");
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "concurrency-bound" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id, expectedRevision: 0, plan: "Allow fixture actions for concurrency coverage.",
+  });
+  assert.equal(plan.approved, true);
+
+  client.setElicitationDecision("none");
+  const calls = Array.from({ length: 16 }, (_, index) => client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id, actionType: "file.write", toolName: "Write",
+      toolInput: { file_path: `/tmp/concurrency-${index}.txt`, content: "fixture" },
+      reason: "Hold an in-flight request to verify the server concurrency ceiling.",
+    },
+  }));
+  const prompts = await Promise.all(Array.from({ length: 16 }, () => client.nextElicitation()));
+  assert.equal(prompts.length, 16);
+
+  const overflow = await client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id, actionType: "file.write", toolName: "Write",
+      toolInput: { file_path: "/tmp/concurrency-overflow.txt", content: "must not be approved" },
+      reason: "This call must be rejected while the bridge is at capacity.",
+    },
+  });
+  assert.equal(overflow.error?.code, -32000);
+  assert.match(overflow.error.message, /server is busy/);
+
+  for (const prompt of prompts) client.respondToElicitation(prompt.id, "decline");
+  await Promise.all(calls);
+  const recovered = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(recovered.run.id, created.run.id, "a later request should run after in-flight capacity is released");
 });
 
 test("MCP bridge bounds oversized input frames and resumes at the next newline", async (t) => {
