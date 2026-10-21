@@ -192,3 +192,21 @@ When the host does not advertise elicitation, a prompt times out, or the host re
 The verification runner records synchronous spawn throws and asynchronous child-process start errors as failed check evidence. Their persisted reason is a stable, generic message; arbitrary exception text is not copied into the report because runtime diagnostics can contain private paths, command arguments, or secrets. Output-stream errors also fail the check and follow the bounded termination path. A close event racing with an earlier error cannot turn the result into a pass or settle the same check twice.
 
 For recovery, preserve the failed run and its evidence, verify the operator-configured executable path, runtime permissions, working directory, and host process/stdio health, then deliberately rerun after assessing replay safety. A start failure means the runner could not establish a successful command execution; it is not evidence that the command ran and failed. The runner does not retry automatically. Detailed host diagnostics, if needed, should be collected through a protected host logging channel rather than added to persisted workflow evidence.
+
+
+## Verification lifecycle and delivery-readiness gate
+
+A verification invocation first checks the caller's expected workflow revision. If the run is still in `running`, the bridge advances it to `verifying` before starting a durable `verification-run-<runId>` step. The stable step ID prevents a second invocation from running concurrently or replaying a completed verification. A stale caller must reload the session. A running step left by a crash is an ambiguous external effect and requires the existing explicit interrupted-step recovery/reconciliation flow; the bridge never automatically retries it.
+
+Each configured check is persisted before the runner advances to the next check. The run-level step is marked `succeeded` only when the complete report is `passed`; failed, timed-out, cancelled, blocked, or otherwise incomplete reports mark the run-level step failed and move the workflow to `failed`. If persistence itself fails, the tool returns an error and any still-running step remains available for explicit recovery. A failed or incomplete verification is not repaired by merely calling the tool again.
+
+`factory_delivery_status` reports `readyForHumanDelivery: true` only when all of these persisted conditions hold:
+
+- The workflow is in the `reviewing` phase.
+- The durable verification-run step succeeded.
+- At least one runner-observed evidence record exists and all runner-observed evidence outcomes passed.
+- At least one review-engine evidence record exists and all review-engine evidence outcomes passed.
+- No workflow step is failed, running, or interrupted.
+- No model-reported evidence claims failure.
+
+Model-reported evidence is displayed separately and can never substitute for runner-observed verification or review-engine evidence. Readiness only means the persisted gates are satisfied and a human may review delivery; it does not authenticate the review engine, prove local state is tamper-proof, or authorize any automatic PR creation, merge, deployment, or publishing. The local JSON store remains a single-host coordination mechanism, not a distributed transaction or cryptographic attestation.

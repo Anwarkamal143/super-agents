@@ -320,6 +320,19 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           throw new TypeError(`Invalid operator verification profile: ${error instanceof Error ? error.message : "invalid JSON"}`);
         }
 
+        // Transition into the verification phase before starting the durable run step.
+        // The revision bump makes a second caller holding the old revision stale; the
+        // stable step ID also prevents a concurrent caller with the new revision from
+        // starting a second process while the first verification is in flight.
+        if (record.run.status === "running") {
+          await orchestrator.transition(runId, "verifying", expectedRevision);
+        }
+        const verificationRunStepId = `verification-run-${runId}`;
+        const verificationRunStep = await orchestrator.beginStep(runId, verificationRunStepId);
+        if (verificationRunStep.status !== "started") {
+          throw new WorkflowConflictError(`Verification cannot start safely (status: ${verificationRunStep.status}); inspect or reconcile the existing run before retrying.`);
+        }
+
         const persisted: Array<{ checkId: string; status: string; outcome: string; exitCode: number | null; durationMs: number; observedStdoutBytes: number; observedStderrBytes: number; outputTruncated: boolean; stdoutDigest: string; stderrDigest: string; reason?: string }> = [];
         const persistCheck = async (check: import("./verification.js").VerificationEvidenceRecord): Promise<void> => {
           const stepId = `runner-verification-${runId}-${check.checkId}-${randomUUID()}`;
@@ -348,37 +361,83 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           });
           persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, observedStdoutBytes: check.observedStdoutBytes, observedStderrBytes: check.observedStderrBytes, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, ...(check.reason ? { reason: check.reason } : {}) });
         };
-        const report = await runVerification({
-          repositoryRoot: cwd,
-          checks: profile.checks,
-          allowedExecutables: profile.allowedExecutables,
-          signal,
-          onCheckComplete: persistCheck,
-          authorize: async (_actionType, payload) => {
-            const beforePrompt = await orchestrator.getWorkflow(runId);
-            if (!beforePrompt || (beforePrompt.run.status !== "running" && beforePrompt.run.status !== "verifying")) return false;
-            const response = await requestHuman(
-              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
-              parentRequestId,
-            );
+        let report: Awaited<ReturnType<typeof runVerification>>;
+        try {
+          report = await runVerification({
+            repositoryRoot: cwd,
+            checks: profile.checks,
+            allowedExecutables: profile.allowedExecutables,
+            signal,
+            onCheckComplete: persistCheck,
+            authorize: async (_actionType, payload) => {
+              const beforePrompt = await orchestrator.getWorkflow(runId);
+              if (!beforePrompt || (beforePrompt.run.status !== "running" && beforePrompt.run.status !== "verifying")) return false;
+              const response = await requestHuman(
+                `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
+                parentRequestId,
+              );
+              const latest = await orchestrator.getWorkflow(runId);
+              const stillCurrent = latest !== undefined && latest !== null &&
+                latest.run.revision === beforePrompt.run.revision &&
+                (latest.run.status === "running" || latest.run.status === "verifying");
+              const accepted = stillCurrent && response.action === "accept" && response.content?.["decision"] === "approve";
+              const approval = await approvals.recordDecision({
+                actionType: "command.execute", payload, outcome: accepted ? "approved" : "denied",
+                decidedBy: "claude-code-elicitation-host",
+                rationale: stillCurrent ? `Verification check ${payload.checkId}` : "Workflow changed while verification approval was pending.",
+                scopeId: runId,
+                ...(latest ? { workflowRevision: latest.run.revision } : {}),
+              });
+              if (!accepted) return false;
+              const authorization = await approvals.authorizeAndConsume("command.execute", payload, approval.id, "factory-verification-runner");
+              return authorization.allowed;
+            },
+          });
+          await orchestrator.finishStep(
+            runId,
+            verificationRunStepId,
+            report.status === "passed" ? "succeeded" : "failed",
+            `Verification run finished with status ${report.status}; checks=${report.checks.length}.`,
+          );
+          if (report.status !== "passed") {
             const latest = await orchestrator.getWorkflow(runId);
-            const stillCurrent = latest !== undefined && latest !== null &&
-              latest.run.revision === beforePrompt.run.revision &&
-              (latest.run.status === "running" || latest.run.status === "verifying");
-            const accepted = stillCurrent && response.action === "accept" && response.content?.["decision"] === "approve";
-            const approval = await approvals.recordDecision({
-              actionType: "command.execute", payload, outcome: accepted ? "approved" : "denied",
-              decidedBy: "claude-code-elicitation-host",
-              rationale: stillCurrent ? `Verification check ${payload.checkId}` : "Workflow changed while verification approval was pending.",
-              scopeId: runId,
-              ...(latest ? { workflowRevision: latest.run.revision } : {}),
-            });
-            if (!accepted) return false;
-            const authorization = await approvals.authorizeAndConsume("command.execute", payload, approval.id, "factory-verification-runner");
-            return authorization.allowed;
-          },
-        });
-        return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Each result was persisted before the runner advanced to another configured check. Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
+            if (latest?.run.status === "verifying") {
+              await orchestrator.transition(runId, "failed", latest.run.revision);
+            }
+          }
+        } catch (error) {
+          // A thrown runner/persistence error can leave individual checks ambiguous.
+          // Never auto-replay them or report success; best-effort failure marking is
+          // followed by explicit interrupted-step reconciliation if persistence fails.
+          try {
+            await orchestrator.finishStep(
+              runId,
+              verificationRunStepId,
+              "failed",
+              "Verification did not return a complete report; inspect persisted check steps before retrying.",
+            );
+          } catch {
+            // If storage itself failed, leave the running step for recovery to mark interrupted.
+          }
+          try {
+            const latest = await orchestrator.getWorkflow(runId);
+            if (latest?.run.status === "verifying") {
+              await orchestrator.transition(runId, "failed", latest.run.revision);
+            }
+          } catch {
+            // Preserve the original error; unreadable state is already fail-closed.
+          }
+          throw error;
+        }
+        return {
+          status: report.status,
+          startedAt: report.startedAt,
+          finishedAt: report.finishedAt,
+          checks: persisted,
+          verificationRunStep: (await orchestrator.getWorkflow(runId))?.steps[verificationRunStepId],
+          evidenceSource: "runner_observed",
+          note: "Each result was persisted before the runner advanced to another configured check. A durable run-level step records the aggregate outcome. Failed or incomplete runs are terminal until a human starts an explicitly reconciled workflow; this bridge never auto-replays checks. Only operator-configured executables and arguments were run, and each process required fresh host approval.",
+        };
       }
       case "factory_evidence_submit": {
         // Keep a handler-level allowlist as defense in depth: even if the
@@ -411,18 +470,36 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         if (!record) throw new Error("Workflow session not found.");
         const modelReported = record.evidence.filter((item) => item.source === "model_reported");
         const runnerObserved = record.evidence.filter((item) => item.source === "runner_observed");
+        const reviewEngine = record.evidence.filter((item) => item.source === "review_engine");
         const modelReportedEvidencePassed = modelReported.length > 0 && modelReported.every((item) => item.outcome === "passed");
         const runnerObservedEvidencePassed = runnerObserved.length > 0 && runnerObserved.every((item) => item.outcome === "passed");
+        const reviewEngineEvidencePassed = reviewEngine.length > 0 && reviewEngine.every((item) => item.outcome === "passed");
+        const verificationRun = record.steps[`verification-run-${runId}`];
+        const noUnresolvedSteps = Object.values(record.steps).every((step) =>
+          step.status !== "running" && step.status !== "interrupted" && step.status !== "failed");
+        const noFailedModelClaims = modelReported.every((item) => item.outcome !== "failed");
+        const readyForHumanDelivery = record.run.status === "reviewing" &&
+          verificationRun?.status === "succeeded" &&
+          runnerObservedEvidencePassed &&
+          reviewEngineEvidencePassed &&
+          noUnresolvedSteps &&
+          noFailedModelClaims;
         return {
           run: record.run,
           evidenceCount: record.evidence.length,
           modelReportedEvidenceCount: modelReported.length,
           runnerObservedEvidenceCount: runnerObserved.length,
+          reviewEngineEvidenceCount: reviewEngine.length,
           modelReportedEvidencePassed,
           runnerObservedEvidencePassed,
-          readyForHumanDelivery: false,
+          reviewEngineEvidencePassed,
+          verificationRunStatus: verificationRun?.status ?? "missing",
+          noUnresolvedSteps,
+          readyForHumanDelivery,
           automaticDelivery: false,
-          note: "Evidence provenance is persisted separately. Model-reported claims never count as runner-observed evidence; this bridge still requires a separate human delivery review.",
+          note: readyForHumanDelivery
+            ? "Verification and review evidence satisfy the persisted readiness gates. A human still controls delivery; this bridge never creates a PR, merges, deploys, or publishes."
+            : "Not ready: requires reviewing phase, a succeeded durable verification-run step, passing runner-observed evidence, passing review-engine evidence, no failed/running/interrupted steps, and no failed model-reported claims. Model-reported evidence never substitutes for runner or review-engine evidence.",
         };
       }
       default: throw new Error(`Unknown tool: ${name}`);
