@@ -240,7 +240,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           onCheckComplete: persistCheck,
           authorize: async (_actionType, payload) => {
             const response = await requestHuman(
-              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\\nExecutable: ${payload.executable}\\nArguments: ${JSON.stringify(payload.args)}\\nWorking directory: ${payload.cwd}\\nEnvironment keys: ${payload.environmentKeys.join(", ")}\\nTimeout: ${payload.timeoutMs} ms\\nOutput limit: ${payload.maxOutputBytes} bytes`,
+              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
               parentRequestId,
             );
             const accepted = response.action === "accept" && response.content?.["decision"] === "approve";
