@@ -271,7 +271,7 @@ test("rejects malformed structured runner verification metadata", async () => {
         checkId: "fixture-check",
         status: "passed",
         exitCode: 0,
-        durationMs: 5,
+        durationMs: 5.25,
         observedStdoutBytes: 7,
         observedStderrBytes: 0,
         outputTruncated: false,
