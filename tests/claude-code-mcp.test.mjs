@@ -1521,6 +1521,86 @@ test("MCP verification runs operator-configured checks and persists runner-obser
   await embedded.close();
 });
 
+test("MCP review fails closed when provider is unavailable or returns malformed output", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-review-failures-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "review-prerequisite",
+      kind: "test",
+      executable: "node",
+      args: ["-e", "process.stdout.write('verified')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "accept", undefined, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "review-failure-host", version: "1.0.0" },
+  });
+  const prepareReviewingRun = async (requestId) => {
+    const created = await client.tool("factory_session_create", { requestId });
+    const plan = await client.tool("factory_plan_request_approval", {
+      runId: created.run.id,
+      expectedRevision: 0,
+      plan: "Prepare a run to exercise the review failure path.",
+    });
+    const verification = await client.tool("factory_verification_run", {
+      runId: created.run.id,
+      expectedRevision: plan.run.revision,
+    });
+    assert.equal(verification.status, "passed");
+    const session = await client.tool("factory_session_get", { runId: created.run.id });
+    const reviewing = await client.tool("factory_phase_transition", {
+      runId: created.run.id,
+      expectedRevision: session.run.revision,
+      to: "reviewing",
+    });
+    return { runId: created.run.id, revision: reviewing.revision };
+  };
+  const unavailableRun = await prepareReviewingRun("review-provider-unavailable");
+  const malformedRun = await prepareReviewingRun("review-provider-malformed");
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.kill("SIGTERM");
+  await closed;
+
+  const unavailable = startEmbeddedClient(path.join(cwd, ".factory-state"));
+  await unavailable.initialize();
+  await assert.rejects(
+    unavailable.tool("factory_review_run", { runId: unavailableRun.runId, expectedRevision: unavailableRun.revision }),
+    /provider is not configured/i,
+  );
+  const unavailableState = await unavailable.tool("factory_session_get", { runId: unavailableRun.runId });
+  assert.equal(unavailableState.steps[`review-run-${unavailableRun.runId}`].status, "failed");
+  await unavailable.close();
+
+  const malformed = startEmbeddedClient(path.join(cwd, ".factory-state"), async () => ({
+    status: "passed",
+    baseCommit: "a".repeat(40),
+    headCommit: "a".repeat(40),
+    diff: "same commit is not a valid pinned review",
+    summary: "This result must be rejected.",
+  }));
+  await malformed.initialize();
+  await assert.rejects(
+    malformed.tool("factory_review_run", { runId: malformedRun.runId, expectedRevision: malformedRun.revision }),
+    /malformed or unpinned/i,
+  );
+  const malformedState = await malformed.tool("factory_session_get", { runId: malformedRun.runId });
+  assert.equal(malformedState.steps[`review-run-${malformedRun.runId}`].status, "failed");
+  assert.equal(malformedState.evidence.some((item) => item.source === "review_engine"), false);
+  const delivery = await malformed.tool("factory_delivery_status", { runId: malformedRun.runId });
+  assert.equal(delivery.readyForHumanDelivery, false);
+  await malformed.close();
+});
+
 test("MCP verification rejects overlapping verification attempts before spawning a second process", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-runner-overlap-"));
   const marker = path.join(cwd, "must-not-run-twice.txt");
