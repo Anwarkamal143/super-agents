@@ -29,7 +29,7 @@ async function completedReport({ status = "PASS", overall = "PASS", missingEvide
     .replace(/^- Evidence(?: \([^)]*\))?:.*$/gm, "- Evidence: https://example.test/evidence");
 
   if (missingEvidenceFor > 0) {
-    const sectionPattern = new RegExp("(^### " + missingEvidenceFor + "\\\\. [\\\\s\\\\S]*?^- Evidence:)[^\\\\n]*", "m");
+    const sectionPattern = new RegExp("(^### " + missingEvidenceFor + "\\. [\\s\\S]*?^- Evidence:)[^\\n]*", "m");
     report = report.replace(sectionPattern, "$1");
   }
 
