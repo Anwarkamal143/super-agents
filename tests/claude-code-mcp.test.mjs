@@ -1676,7 +1676,7 @@ test("MCP bridge rejects duplicate initialize without resetting negotiated capab
 
 test("MCP bridge cancels pending plan approval and exits promptly when stdin closes", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stdin-close-"));
-  const client = startClient(cwd, "none", 60_000);
+  const client = startClient(cwd, "accept", 60_000);
   t.after(async () => {
     client.child.kill("SIGTERM");
     await rm(cwd, { recursive: true, force: true });
@@ -1752,6 +1752,7 @@ test("MCP bridge does not grant native action approval after stdin closes", asyn
     plan: "Allow the workflow to reach an action-approval request.",
   });
   assert.equal(plan.approved, true);
+  client.setElicitationDecision("none");
 
   const pending = client.request("tools/call", {
     name: "factory_action_request_approval",
@@ -1812,6 +1813,7 @@ test("MCP bridge does not spawn verification command when stdin closes during ap
     plan: "Allow verification to be requested, but not run without approval.",
   });
   assert.equal(plan.approved, true);
+  client.setElicitationDecision("none");
 
   const pending = client.request("tools/call", {
     name: "factory_verification_run",
