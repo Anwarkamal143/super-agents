@@ -94,9 +94,21 @@ function startClient(cwd, elicitationDecision = "accept", elicitationTimeoutMs, 
     for (let offset = 0; offset < raw.length; offset += chunkSize) child.stdin.write(raw.slice(offset, offset + chunkSize));
     child.stdin.write("\n");
   };
-  const nextElicitation = () => elicitationQueue.length
-    ? Promise.resolve(elicitationQueue.shift())
-    : new Promise((resolve) => elicitationWaiters.push(resolve));
+  const nextElicitation = () => {
+    if (elicitationQueue.length) return Promise.resolve(elicitationQueue.shift());
+    return new Promise((resolve, reject) => {
+      const waiter = (message) => {
+        clearTimeout(timer);
+        resolve(message);
+      };
+      const timer = setTimeout(() => {
+        const index = elicitationWaiters.indexOf(waiter);
+        if (index !== -1) elicitationWaiters.splice(index, 1);
+        reject(new Error(`Timed out waiting for MCP elicitation. stderr=${stderr}`));
+      }, 3000);
+      elicitationWaiters.push(waiter);
+    });
+  };
   const respondToElicitation = (elicitationId, decision = "accept") => {
     child.stdin.write(JSON.stringify({
       jsonrpc: "2.0",
