@@ -362,9 +362,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
         executionError ??= "Unable to confirm verification process termination.";
         finish(null);
       }, 250);
-      killTimer.unref();
     }, 250);
-    killTimer.unref();
   };
 
   if (signal?.aborted) {
