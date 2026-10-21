@@ -1673,3 +1673,43 @@ test("MCP bridge rejects duplicate initialize without resetting negotiated capab
   });
   assert.equal(plan.approved, true);
 });
+
+test("MCP bridge cancels pending plan approval and exits promptly when stdin closes", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-stdin-close-"));
+  const client = startClient(cwd, "none", 60_000);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "disconnecting-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "stdin-close" });
+  const pendingApproval = client.request("tools/call", {
+    name: "factory_plan_request_approval",
+    arguments: {
+      runId: created.run.id,
+      expectedRevision: 0,
+      plan: "A disconnected host must not approve this plan.",
+    },
+  }).catch(() => undefined);
+  const prompt = await client.nextElicitation();
+  assert.equal(prompt.method, "elicitation/create");
+
+  const exited = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    exited,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("MCP bridge did not exit promptly after stdin closed.")), 1500)),
+  ]);
+  await pendingApproval;
+
+  const persisted = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
+  const run = persisted.find((item) => item.run.id === created.run.id);
+  assert.ok(run, "workflow remains persisted after transport shutdown");
+  assert.equal(run.run.status, "cancelled");
+});
+
