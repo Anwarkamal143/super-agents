@@ -6,7 +6,7 @@
  * protocol behavior is limited to initialize, tools/list, tools/call, and
  * server-initiated elicitation/create responses.
  */
-import { randomUUID } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -38,8 +38,28 @@ const TOOLS = [
   { name: "factory_action_request_approval", description: "Request fresh human approval for one exact native Claude Code tool input. Payload must be {toolName, toolInput}; it is bound to a SHA-256 digest and consumed once by the PreToolUse gate.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, actionType: { type: "string", enum: ["file.write", "command.execute"] }, toolName: { type: "string", enum: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"] }, toolInput: { type: "object" }, reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["runId", "actionType", "toolName", "toolInput", "reason"], additionalProperties: false } },
   { name: "factory_verification_run", description: "Run the operator-configured, bounded verification profile. Each exact check requires fresh human approval; results are persisted as runner-observed evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 } }, required: ["runId", "expectedRevision"], additionalProperties: false } },
   { name: "factory_evidence_submit", description: "Persist bounded evidence from the active model session. Model-reported evidence is not trusted runner evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, summary: { type: "string", minLength: 1, maxLength: 4000 }, kind: { type: "string", enum: ["command", "test", "typecheck", "review", "other"] }, outcome: { type: "string", enum: ["passed", "failed", "skipped", "unknown"] } }, required: ["runId", "expectedRevision", "summary", "kind", "outcome"], additionalProperties: false } },
+  { name: "factory_review_run", description: "Run the configured trusted host review provider against a pinned repository diff. The model can request a review but cannot supply its outcome or provenance.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 } }, required: ["runId", "expectedRevision"], additionalProperties: false } },
   { name: "factory_delivery_status", description: "Report delivery readiness; never creates PRs, merges, deploys or publishes.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
 ] as const;
+
+export interface TrustedReviewProviderInput {
+  readonly runId: string;
+  readonly workflowRevision: number;
+  readonly repositoryRoot: string;
+  readonly signal: AbortSignal;
+}
+
+export interface TrustedReviewProviderResult {
+  readonly status: "passed" | "changes_requested" | "blocked";
+  readonly baseCommit: string;
+  readonly headCommit: string;
+  /** Exact diff bytes reviewed by the configured host provider; never persisted or returned to the model. */
+  readonly diff: string;
+  readonly summary: string;
+}
+
+/** Host-owned integration; model-facing arguments cannot supply the review or its provenance. */
+export type TrustedReviewProvider = (input: TrustedReviewProviderInput) => Promise<TrustedReviewProviderResult>;
 
 export interface FactoryMcpServerOptions {
   readonly stateDirectory?: string;
@@ -47,6 +67,8 @@ export interface FactoryMcpServerOptions {
   readonly output?: NodeJS.WritableStream;
   /** Bounded override intended for tests and controlled local deployments. */
   readonly elicitationTimeoutMs?: number;
+  /** Optional trusted host callback. Omit to fail closed when review is requested. */
+  readonly reviewProvider?: TrustedReviewProvider;
 }
 
 const DEFAULT_ELICITATION_TIMEOUT_MS = 45_000;
@@ -463,6 +485,76 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           id: randomUUID(), runId, source: "model_reported", kind, outcome, summary, observedAt: new Date().toISOString(), artifactIds: [],
         });
         return { stored: true, trust: "model-reported-unverified", run: await orchestrator.getWorkflow(runId) };
+      }
+      case "factory_review_run": {
+        const runId = requireString(args, "runId");
+        const expectedRevision = requireInteger(args, "expectedRevision");
+        const record = await orchestrator.getWorkflow(runId);
+        if (!record) throw new Error("Workflow session not found.");
+        if (record.run.revision !== expectedRevision) throw new WorkflowConflictError("Stale revision; reload before requesting review.");
+        if (record.run.status !== "reviewing") throw new WorkflowConflictError("Review can only run after the workflow enters the reviewing phase.");
+        const reviewStepId = `review-run-${runId}`;
+        const step = await orchestrator.beginStep(runId, reviewStepId);
+        if (step.status !== "started") {
+          throw new WorkflowConflictError(`Review cannot start safely (status: ${step.status}); inspect or reconcile the existing run before retrying.`);
+        }
+        try {
+          if (!options.reviewProvider) {
+            throw new Error("Trusted review provider is not configured; review remains unavailable and delivery readiness is blocked.");
+          }
+          const result = await options.reviewProvider({
+            runId,
+            workflowRevision: expectedRevision,
+            repositoryRoot: cwd,
+            signal,
+          });
+          if (!result || typeof result !== "object" ||
+              !["passed", "changes_requested", "blocked"].includes(result.status) ||
+              typeof result.baseCommit !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(result.baseCommit) ||
+              typeof result.headCommit !== "string" || !/^(?:[a-f0-9]{40}|[a-f0-9]{64})$/i.test(result.headCommit) ||
+              result.baseCommit.toLowerCase() === result.headCommit.toLowerCase() ||
+              typeof result.diff !== "string" || Buffer.byteLength(result.diff, "utf8") === 0 ||
+              Buffer.byteLength(result.diff, "utf8") > 5 * 1024 * 1024 ||
+              typeof result.summary !== "string" || !result.summary.trim() || result.summary.length > 2000) {
+            throw new TypeError("Trusted review provider returned malformed or unpinned review output.");
+          }
+          const diffDigest = createHash("sha256").update(result.diff, "utf8").digest("hex");
+          const passed = result.status === "passed";
+          const summary = `Trusted review ${result.status}; base=${result.baseCommit.toLowerCase()}; head=${result.headCommit.toLowerCase()}; diffSha256=${diffDigest}. ${result.summary.trim()}`;
+          await orchestrator.finishStep(runId, reviewStepId, passed ? "succeeded" : "failed", summary, {
+            id: randomUUID(),
+            runId,
+            source: "review_engine",
+            kind: "review",
+            outcome: passed ? "passed" : "failed",
+            summary,
+            observedAt: new Date().toISOString(),
+            artifactIds: [],
+          });
+          return {
+            status: result.status,
+            baseCommit: result.baseCommit.toLowerCase(),
+            headCommit: result.headCommit.toLowerCase(),
+            diffDigest,
+            evidenceSource: "review_engine",
+            verificationStep: (await orchestrator.getWorkflow(runId))?.steps[reviewStepId],
+            note: passed
+              ? "The configured host review provider returned a passing result pinned to this diff digest. This is trusted-provider output, not cryptographic attestation or proof of authenticated reviewer identity."
+              : "Review did not pass; delivery readiness remains blocked. Inspect the persisted review step and evidence before any explicit recovery.",
+          };
+        } catch (error) {
+          try {
+            await orchestrator.finishStep(
+              runId,
+              reviewStepId,
+              "failed",
+              "Review did not produce a complete validated result; inspect provider state before explicit recovery.",
+            );
+          } catch {
+            // Leave an ambiguous running step for explicit interrupted-step recovery if persistence failed.
+          }
+          throw error;
+        }
       }
       case "factory_delivery_status": {
         const runId = requireString(args, "runId");
