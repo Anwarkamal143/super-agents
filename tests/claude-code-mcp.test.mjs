@@ -1144,7 +1144,7 @@ test("MCP bridge exposes human-gated interrupted-step recovery and never retries
     reason: "Inspected the prior process and reconciled its effects.",
   });
   const retryPrompt = await client.nextElicitation();
-  assert.match(retryPrompt.params.message, /replay is safe/);
+  assert.match(retryPrompt.params.message, /retry is safe only if replay cannot duplicate harmful effects/);
   assert.match(retryPrompt.params.message, /verify-test/);
   client.respondToElicitation(retryPrompt.id, "accept");
   const reconciled = await reconciliationPromise;
