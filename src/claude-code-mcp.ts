@@ -529,6 +529,11 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             repositoryRoot: cwd,
             signal: signal ?? new AbortController().signal,
           });
+          // Providers should honor cancellation, but they may race it or ignore
+          // the signal. Never treat a late result as evidence for a cancelled call.
+          if (signal?.aborted) {
+            throw new ParentRequestCancelledError();
+          }
           const latest = await orchestrator.getWorkflow(runId);
           if (!latest || latest.run.revision !== expectedRevision || latest.run.status !== "reviewing") {
             throw new WorkflowConflictError("Workflow changed while the review provider was running; its result was discarded.");
@@ -544,6 +549,11 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             throw new TypeError("Trusted review provider returned malformed or unpinned review output.");
           }
           const diffDigest = createHash("sha256").update(result.diff, "utf8").digest("hex");
+          // Recheck immediately before the persistence boundary as well: an abort
+          // can arrive while the workflow revision was being re-read above.
+          if (signal?.aborted) {
+            throw new ParentRequestCancelledError();
+          }
           const passed = result.status === "passed";
           const summary = `Trusted review ${result.status}; base=${result.baseCommit.toLowerCase()}; head=${result.headCommit.toLowerCase()}; diffSha256=${diffDigest}. ${result.summary.trim()}`;
           await orchestrator.finishStep(runId, reviewStepId, passed ? "succeeded" : "failed", summary, {

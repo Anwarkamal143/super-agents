@@ -227,9 +227,9 @@ function startEmbeddedClient(stateDirectory, reviewProvider, initialElicitationD
       }
     }
   });
-  const request = (method, params = {}) => {
+  const requestWithId = (method, params = {}) => {
     const requestId = ++id;
-    return new Promise((resolve, reject) => {
+    const response = new Promise((resolve, reject) => {
       const timer = setTimeout(() => {
         pending.delete(String(requestId));
         reject(new Error(`Embedded MCP request timed out: ${method}`));
@@ -241,6 +241,15 @@ function startEmbeddedClient(stateDirectory, reviewProvider, initialElicitationD
       });
       input.write(JSON.stringify({ jsonrpc: "2.0", id: requestId, method, params }) + "\n");
     });
+    return { requestId, response };
+  };
+  const request = (method, params = {}) => requestWithId(method, params).response;
+  const cancelRequest = (requestId) => {
+    input.write(JSON.stringify({
+      jsonrpc: "2.0",
+      method: "notifications/cancelled",
+      params: { requestId, reason: "Test cancellation of a pending trusted review." },
+    }) + "\n");
   };
   const tool = async (name, args) => {
     const response = await request("tools/call", { name, arguments: args });
@@ -273,7 +282,7 @@ function startEmbeddedClient(stateDirectory, reviewProvider, initialElicitationD
     input.end();
     await server;
   };
-  return { initialize, request, tool, close, nextElicitation, respondToElicitation, setElicitationDecision: (decision) => { elicitationDecision = decision; } };
+  return { initialize, request, requestWithId, cancelRequest, tool, close, nextElicitation, respondToElicitation, setElicitationDecision: (decision) => { elicitationDecision = decision; } };
 }
 
 function runHook(cwd, toolName, toolInput) {
@@ -2521,4 +2530,67 @@ test("MCP trusted review rejects a competing approved retry before a duplicate p
   const final = await client.tool("factory_session_get", { runId: created.run.id });
   assert.equal(final.steps[`review-run-${created.run.id}`].status, "succeeded");
   assert.equal(final.steps[`review-run-${created.run.id}`].attempt, 2);
+});
+
+
+
+test("MCP trusted review discards a passing provider result that resolves after request cancellation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-review-cancel-late-result-"));
+  let providerCalls = 0;
+  let observedSignal;
+  let signalProviderStarted;
+  let resolveProvider;
+  const providerStarted = new Promise((resolve) => { signalProviderStarted = resolve; });
+  const provider = async ({ signal }) => {
+    providerCalls += 1;
+    observedSignal = signal;
+    signalProviderStarted();
+    return new Promise((resolve) => { resolveProvider = resolve; });
+  };
+  const client = startEmbeddedClient(path.join(cwd, ".factory-state"), provider);
+  t.after(async () => { await client.close(); await rm(cwd, { recursive: true, force: true }); });
+  await client.initialize();
+  const created = await client.tool("factory_session_create", { requestId: "review-cancel-late-result" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id, expectedRevision: 0, plan: "Reach trusted review before cancelling it.",
+  });
+  const verifying = await client.tool("factory_phase_transition", {
+    runId: created.run.id, expectedRevision: plan.run.revision, to: "verifying",
+  });
+  const reviewing = await client.tool("factory_phase_transition", {
+    runId: created.run.id, expectedRevision: verifying.revision, to: "reviewing",
+  });
+
+  const pendingReview = client.requestWithId("tools/call", {
+    name: "factory_review_run",
+    arguments: { runId: created.run.id, expectedRevision: reviewing.revision },
+  });
+  await providerStarted;
+  assert.equal(providerCalls, 1);
+  assert.equal(observedSignal.aborted, false);
+
+  client.cancelRequest(pendingReview.requestId);
+  assert.equal(observedSignal.aborted, true);
+  // Simulate a provider that ignores AbortSignal and returns a valid passing
+  // result after the caller has cancelled its request.
+  resolveProvider({
+    status: "passed",
+    baseCommit: "a".repeat(40),
+    headCommit: "b".repeat(40),
+    diff: "late passing diff",
+    summary: "This late result must not become trusted evidence.",
+  });
+
+  const response = await pendingReview.response;
+  assert.equal(response.result?.isError, true);
+  assert.match(response.result.content[0].text, /cancelled/i);
+  const state = await client.tool("factory_session_get", { runId: created.run.id });
+  const reviewStep = state.steps[`review-run-${created.run.id}`];
+  assert.equal(reviewStep.status, "failed");
+  assert.equal(reviewStep.attempt, 1);
+  assert.equal(providerCalls, 1);
+  assert.equal(state.evidence.some((item) => item.source === "review_engine" && item.outcome === "passed"), false);
+  assert.equal(state.events.some((event) =>
+    event.kind === "step_finished" && event.stepId === reviewStep.id && event.stepStatus === "succeeded"
+  ), false);
 });
