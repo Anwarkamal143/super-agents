@@ -45,6 +45,7 @@ export interface FactoryMcpServerOptions {
 const DEFAULT_ELICITATION_TIMEOUT_MS = 45_000;
 const MAX_ELICITATION_TIMEOUT_MS = 120_000;
 const MAX_JSON_RPC_FRAME_BYTES = 1_048_576;
+const MAX_IN_FLIGHT_TOOL_CALLS = 16;
 
 export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {}): Promise<void> {
   const configuredTimeout = options.elicitationTimeoutMs ?? Number(process.env["FACTORY_ELICITATION_TIMEOUT_MS"] ?? DEFAULT_ELICITATION_TIMEOUT_MS);
@@ -63,6 +64,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   let clientElicitation = false;
   const pending = new Map<string | number, { resolve: (message: RpcMessage) => void; reject: (error: Error) => void; parentRequestId?: string | number }>();
   const requestControllers = new Map<string | number, AbortController>();
+  const inFlightToolCallIds = new Set<string | number>();
 
   const send = (message: RpcMessage) => { output.write(JSON.stringify(message) + "\n"); };
   const rpcRequest = (method: string, params: JsonObject, parentRequestId?: string | number): Promise<RpcMessage> => new Promise((resolve, reject) => {
@@ -414,20 +416,33 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         return;
       }
       if (message.method === "tools/call") {
+        const requestId = message.id;
+        if (requestId !== undefined) {
+          if (inFlightToolCallIds.has(requestId)) {
+            send({ jsonrpc: "2.0", id: requestId, error: { code: -32600, message: "Duplicate in-flight request ID." } });
+            return;
+          }
+          if (inFlightToolCallIds.size >= MAX_IN_FLIGHT_TOOL_CALLS) {
+            send({ jsonrpc: "2.0", id: requestId, error: { code: -32000, message: "MCP server is busy; retry after an in-flight tool call completes." } });
+            return;
+          }
+          inFlightToolCallIds.add(requestId);
+        }
         try {
           const params = message.params ?? {};
           const name = requireString(params, "name");
           const args = params["arguments"] === undefined ? {} : requireObject(params["arguments"], "arguments");
           const controller = new AbortController();
-          if (message.id !== undefined) requestControllers.set(message.id, controller);
-          try {
-            const result = await callTool(name, args, message.id, controller.signal);
-            send({ jsonrpc: "2.0", id: message.id, result: textResult(result) });
-          } finally {
-            if (message.id !== undefined) requestControllers.delete(message.id);
-          }
+          if (requestId !== undefined) requestControllers.set(requestId, controller);
+          const result = await callTool(name, args, requestId, controller.signal);
+          send({ jsonrpc: "2.0", id: requestId, result: textResult(result) });
         } catch (error) {
-          send({ jsonrpc: "2.0", id: message.id, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "Tool failed closed." }] } });
+          send({ jsonrpc: "2.0", id: requestId, result: { isError: true, content: [{ type: "text", text: error instanceof Error ? error.message : "Tool failed closed." }] } });
+        } finally {
+          if (requestId !== undefined) {
+            requestControllers.delete(requestId);
+            inFlightToolCallIds.delete(requestId);
+          }
         }
         return;
       }

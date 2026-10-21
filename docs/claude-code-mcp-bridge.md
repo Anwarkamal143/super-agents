@@ -75,6 +75,12 @@ The stdio bridge accepts newline-delimited JSON-RPC frames up to **1,048,576 byt
 
 This protects the bridge from oversized single-frame buffering and JSON parsing. It does not cap the size of an individual upstream stream chunk already delivered by Node, or replace host-level process/memory limits.
 
+## Concurrent tool-call limit
+
+The bridge accepts at most **16 in-flight `tools/call` requests**. A request that reuses an ID still in flight receives JSON-RPC `-32600` and is not dispatched a second time. A new request arriving at capacity receives `-32000` with a retry-after-completion message; it is not queued and cannot mutate workflow or approval state. Request IDs and capacity slots are released in a `finally` path after success or failure, including host cancellation.
+
+This bounds concurrent tool-handler work and pending elicitation pressure, but it is not a total process resource limit: one active tool can still consume resources within its own documented bounds, and an individual input chunk may already have been allocated by Node. Clients should wait for a response or cancellation before retrying a busy request, using a fresh request ID for each new attempt.
+
 ## MCP request validation
 
 The bridge validates raw `tools/call` arguments against the server's published input schema before dispatching a tool handler. This independently enforces required fields, value types, enum membership, string bounds, non-negative safe-integer revisions, and rejection of unexpected fields where the schema sets `additionalProperties: false`. Do not rely on a client or model honoring `tools/list` schemas: malformed arguments are rejected before workflow, approval, or evidence state is mutated.
