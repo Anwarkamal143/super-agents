@@ -433,8 +433,8 @@ test("MCP bridge accepts frames at the byte limit with LF and CRLF delimiters", 
   assert.equal(crlfResponse.error, undefined, JSON.stringify(crlfResponse));
 
   const state = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
-  assert.ok(state.runs.some((run) => run.requestId === "exact-lf-frame"));
-  assert.ok(state.runs.some((run) => run.requestId === "exact-crlf-frame"));
+  assert.equal(state.length, 2, "both maximum-sized frames must dispatch exactly once");
+  assert.ok(state.every((entry) => entry.run.status === "created"));
 });
 
 test("MCP bridge rejects a frame one byte over the limit without dispatch or payload echo", async (t) => {
