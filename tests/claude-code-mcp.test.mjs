@@ -282,7 +282,7 @@ function startEmbeddedClient(stateDirectory, reviewProvider, initialElicitationD
     input.end();
     await server;
   };
-  return { initialize, request, tool, close, nextElicitation, respondToElicitation, setElicitationDecision: (decision) => { elicitationDecision = decision; } };
+  return { initialize, request, requestWithId, cancelRequest, tool, close, nextElicitation, respondToElicitation, setElicitationDecision: (decision) => { elicitationDecision = decision; } };
 }
 
 function runHook(cwd, toolName, toolInput) {
