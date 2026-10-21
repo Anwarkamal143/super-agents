@@ -222,12 +222,12 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const digest = digestPayload(payload);
         let response: { action: ElicitationAction; content?: JsonObject };
         try {
-          response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\\n\\nExact tool input:\\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
+          response = await requestHuman(`Authorize one exact Claude Code action? Run: ${runId}. Tool: ${toolName}. Action: ${actionType}. SHA-256: ${digest}. Reason: ${reason}\n\nExact tool input:\n${JSON.stringify(toolInput, null, 2)}`, parentRequestId);
         } catch {
           // Missing host support, timeout, or transport failure is a denial,
           // not an approval-shaped success or an opaque tool-call error.
           // If this audit write fails, propagate it and remain fail-closed.
-          const failureReason = "Human elicitation was unavailable or failed; no action was approved."; 
+          const failureReason = "Human elicitation was unavailable or failed; no action was approved.";
           await approvals.recordDecision({
             actionType, payload, outcome: "denied", decidedBy: "claude-code-elicitation-host",
             rationale: failureReason, scopeId: runId,
