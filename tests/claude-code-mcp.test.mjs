@@ -2437,6 +2437,15 @@ test("MCP trusted review retries require fresh human approval and preserve attem
   assert.equal(stillFailed.steps[failedStepId].status, "failed");
   assert.equal(stillFailed.steps[failedStepId].attempt, 1);
 
+  client.setElicitationDecision("cancel");
+  const cancelled = await client.tool("factory_review_run", { runId: created.run.id, expectedRevision: reviewing.revision });
+  assert.equal(cancelled.status, "blocked");
+  assert.equal(providerCalls, 1);
+  client.setElicitationDecision("malformed");
+  const malformed = await client.tool("factory_review_run", { runId: created.run.id, expectedRevision: reviewing.revision });
+  assert.equal(malformed.status, "blocked");
+  assert.equal(providerCalls, 1);
+
   client.setElicitationDecision("accept");
   const second = await client.tool("factory_review_run", { runId: created.run.id, expectedRevision: reviewing.revision });
   assert.equal(second.status, "passed");
@@ -2480,4 +2489,36 @@ test("MCP trusted review retry revalidates workflow state after approval and doe
   assert.equal(providerCalls, 1);
   const final = await client.tool("factory_session_get", { runId: created.run.id });
   assert.equal(final.steps[`review-run-${created.run.id}`].attempt, 1);
+});
+
+
+test("MCP trusted review rejects a competing approved retry before a duplicate provider call", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-review-retry-race-"));
+  let providerCalls = 0;
+  const provider = async () => {
+    providerCalls += 1;
+    return { status: providerCalls === 1 ? "changes_requested" : "passed", baseCommit: "a".repeat(40), headCommit: providerCalls === 1 ? "b".repeat(40) : "c".repeat(40), diff: `review diff ${providerCalls}`, summary: "Pinned review result." };
+  };
+  const client = startEmbeddedClient(path.join(cwd, ".factory-state"), provider);
+  t.after(async () => { await client.close(); await rm(cwd, { recursive: true, force: true }); });
+  await client.initialize();
+  const created = await client.tool("factory_session_create", { requestId: "review-retry-race" });
+  const plan = await client.tool("factory_plan_request_approval", { runId: created.run.id, expectedRevision: 0, plan: "Exercise competing review retry requests." });
+  const verifying = await client.tool("factory_phase_transition", { runId: created.run.id, expectedRevision: plan.run.revision, to: "verifying" });
+  const reviewing = await client.tool("factory_phase_transition", { runId: created.run.id, expectedRevision: verifying.revision, to: "reviewing" });
+  await client.tool("factory_review_run", { runId: created.run.id, expectedRevision: reviewing.revision });
+  client.setElicitationDecision("manual");
+  const args = { name: "factory_review_run", arguments: { runId: created.run.id, expectedRevision: reviewing.revision } };
+  const firstRetry = client.request("tools/call", args);
+  const secondRetry = client.request("tools/call", args);
+  const prompts = await Promise.all([client.nextElicitation(), client.nextElicitation()]);
+  assert.equal(prompts.length, 2);
+  for (const prompt of prompts) client.respondToElicitation(prompt, "accept");
+  const responses = await Promise.all([firstRetry, secondRetry]);
+  assert.equal(responses.filter((response) => response.result?.isError !== true).length, 1);
+  assert.equal(responses.filter((response) => response.result?.isError === true).length, 1);
+  assert.equal(providerCalls, 2);
+  const final = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(final.steps[`review-run-${created.run.id}`].status, "succeeded");
+  assert.equal(final.steps[`review-run-${created.run.id}`].attempt, 2);
 });
