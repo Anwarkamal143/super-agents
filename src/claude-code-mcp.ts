@@ -448,7 +448,7 @@ function isValidRequestId(value: unknown): value is string | number {
   return typeof value === "string" || (typeof value === "number" && Number.isFinite(value));
 }
 
-function isJsonRpcRequest(value: unknown): value is RpcMessage {
+function isJsonRpcRequest(value: unknown): value is RpcMessage & { id?: string | number } {
   if (!isPlainObject(value) || value["jsonrpc"] !== "2.0" ||
       typeof value["method"] !== "string" || value["method"].length === 0) return false;
   if (Object.hasOwn(value, "id") && !isValidRequestId(value["id"])) return false;
