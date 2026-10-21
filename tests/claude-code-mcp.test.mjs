@@ -1661,19 +1661,19 @@ test("MCP bridge ignores JSON-RPC batch frames without dispatching contained mut
     },
   ]);
 
-  await new Promise((resolve) => setTimeout(resolve, 50));
-  await assert.rejects(
-    readFile(path.join(cwd, ".factory-state", "workflows.json")),
-    { code: "ENOENT" },
-    "a JSON-RPC batch must not initialize the session or dispatch its contained tool call",
-  );
-
+  // A following single request acts as a stream-ordering barrier: its response
+  // proves the preceding batch frame was consumed before we inspect persisted state.
   const initialized = await client.request("initialize", {
     protocolVersion: "2025-11-25",
     capabilities: { elicitation: { form: {} } },
     clientInfo: { name: "single-request-client", version: "1.0.0" },
   });
   assert.equal(initialized.result.protocolVersion, "2025-11-25");
+  await assert.rejects(
+    readFile(path.join(cwd, ".factory-state", "workflows.json")),
+    { code: "ENOENT" },
+    "a JSON-RPC batch must not initialize the session or dispatch its contained tool call",
+  );
   const created = await client.tool("factory_session_create", { requestId: "single-request-after-batch" });
   assert.equal(created.run.status, "created");
 });
