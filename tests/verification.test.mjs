@@ -278,3 +278,41 @@ test("timed-out check stops later approvals and leaves later checks explicitly s
     assert.match(report.checks[1].reason, /earlier check stopped/);
   });
 });
+
+
+test("output-limit overflow fails even when the process exits successfully after SIGTERM", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        // Simulate a process that handles SIGTERM and exits with code 0.
+        queueMicrotask(() => child.emit("close", 0));
+        return true;
+      };
+      queueMicrotask(() => {
+        child.stdout.write(Buffer.from("0123456789"));
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", 0);
+      });
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [{ id: "overflow", kind: "command", executable: "node", args: [], maxOutputBytes: 4 }],
+    }));
+    const result = report.checks[0];
+    assert.equal(report.status, "failed");
+    assert.equal(result.status, "failed");
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.reason, "Check exceeded its output limit.");
+    assert.equal(result.stdout.length, 4);
+    assert.equal(result.outputTruncated, true);
+    assert.equal(result.observedStdoutBytes, 10);
+    assert.deepEqual(calls, ["SIGTERM"]);
+  });
+});
