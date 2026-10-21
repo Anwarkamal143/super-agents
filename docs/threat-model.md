@@ -4,7 +4,7 @@ This document describes the controls present in the current library modules. It 
 
 ## Scope and security objectives
 
-The factory is a TypeScript library for coordinating repository discovery, harness invocation, approval, verification, review, manifests, and persisted workflow state. The current repository does **not** provide a complete end-user CLI or a production multi-host service. Integrators own authentication, authorization identity, durable deployment storage, and wiring the modules together.
+The factory is a TypeScript library for coordinating repository discovery, harness invocation, approval, verification, review, manifests, and persisted workflow state. The current repository does **not** provide a complete end-user CLI or a production multi-host service. Verification outcomes are persisted one check at a time by the MCP bridge; a persistence failure stops the sequence before later checks can start, but local JSON storage is not transactional or remotely durable. Integrators own authentication, authorization identity, durable deployment storage, and wiring the modules together.
 
 Security objectives:
 
@@ -51,7 +51,7 @@ Security objectives:
 | False passing review | Distinct standards/spec axes, pinned commits and diff digest, validated reports, missing spec blocks pass, bounded authorized repair and exact-fixed-point verification | Review quality remains probabilistic; tests and human review remain necessary |
 | Malicious manifest / skill entrypoint | Schema validation, duplicate/path checks, capability preflight; entrypoints are declarative and never imported or executed | A compatible manifest is not trusted code and grants no permissions; callers must separately review and authorize execution |
 | Audit tampering or deletion | Events are retained with persisted workflow/approval snapshots | Events are not cryptographically chained or remotely immutable; use an external append-only audit sink for regulated or hostile environments |
-| Denial of service | Bounded process timeout/output, bounded repair attempts, bounded instruction reads and lock waits | Overall request quotas, concurrency caps, storage quotas, and rate limits are integration responsibilities |
+| Denial of service | Bounded process timeout/output, bounded repair attempts, bounded instruction reads and lock waits; bridge awaits per-check evidence persistence before advancing | Overall request quotas, concurrency caps, storage quotas, and rate limits are integration responsibilities; a local storage failure may leave the current step interrupted and requires reconciliation |
 
 ## Operational rules
 

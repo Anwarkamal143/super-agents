@@ -216,35 +216,8 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
           throw new TypeError(`Invalid operator verification profile: ${error instanceof Error ? error.message : "invalid JSON"}`);
         }
 
-        const report = await runVerification({
-          repositoryRoot: cwd,
-          checks: profile.checks,
-          allowedExecutables: profile.allowedExecutables,
-          signal,
-          authorize: async (_actionType, payload) => {
-            const response = await requestHuman(
-              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
-              parentRequestId,
-            );
-            const accepted = response.action === "accept" && response.content?.["decision"] === "approve";
-            const approval = await approvals.recordDecision({
-              actionType: "command.execute",
-              payload,
-              outcome: accepted ? "approved" : "denied",
-              decidedBy: "claude-code-elicitation-host",
-              rationale: `Verification check ${payload.checkId}`,
-              scopeId: runId,
-            });
-            if (!accepted) return false;
-            const authorization = await approvals.authorizeAndConsume(
-              "command.execute", payload, approval.id, "factory-verification-runner",
-            );
-            return authorization.allowed;
-          },
-        });
-
-        const persisted = [];
-        for (const check of report.checks) {
+        const persisted: Array<{ checkId: string; status: string; outcome: string; exitCode: number | null; durationMs: number; observedStdoutBytes: number; observedStderrBytes: number; outputTruncated: boolean; stdoutDigest: string; stderrDigest: string; reason?: string }> = [];
+        const persistCheck = async (check: import("./verification.js").VerificationEvidenceRecord): Promise<void> => {
           const stepId = `runner-verification-${runId}-${check.checkId}-${randomUUID()}`;
           const started = await orchestrator.beginStep(runId, stepId);
           if (started.status !== "started") throw new WorkflowConflictError(`Could not persist verification step ${check.checkId}.`);
@@ -257,9 +230,30 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
             id: randomUUID(), runId, source: "runner_observed", kind, outcome, summary,
             observedAt: check.finishedAt, artifactIds: [],
           });
-          persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, observedStdoutBytes: check.observedStdoutBytes, observedStderrBytes: check.observedStderrBytes, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, reason: check.reason });
-        }
-        return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
+          persisted.push({ checkId: check.checkId, status: check.status, outcome, exitCode: check.exitCode, durationMs: check.durationMs, observedStdoutBytes: check.observedStdoutBytes, observedStderrBytes: check.observedStderrBytes, outputTruncated: check.outputTruncated, stdoutDigest: check.stdoutDigest, stderrDigest: check.stderrDigest, ...(check.reason ? { reason: check.reason } : {}) });
+        };
+        const report = await runVerification({
+          repositoryRoot: cwd,
+          checks: profile.checks,
+          allowedExecutables: profile.allowedExecutables,
+          signal,
+          onCheckComplete: persistCheck,
+          authorize: async (_actionType, payload) => {
+            const response = await requestHuman(
+              `Authorize this exact verification process? Run: ${runId}. Check: ${payload.checkId}.\nExecutable: ${payload.executable}\nArguments: ${JSON.stringify(payload.args)}\nWorking directory: ${payload.cwd}\nEnvironment keys: ${payload.environmentKeys.join(", ")}\nTimeout: ${payload.timeoutMs} ms\nOutput limit: ${payload.maxOutputBytes} bytes`,
+              parentRequestId,
+            );
+            const accepted = response.action === "accept" && response.content?.["decision"] === "approve";
+            const approval = await approvals.recordDecision({
+              actionType: "command.execute", payload, outcome: accepted ? "approved" : "denied",
+              decidedBy: "claude-code-elicitation-host", rationale: `Verification check ${payload.checkId}`, scopeId: runId,
+            });
+            if (!accepted) return false;
+            const authorization = await approvals.authorizeAndConsume("command.execute", payload, approval.id, "factory-verification-runner");
+            return authorization.allowed;
+          },
+        });
+        return { status: report.status, startedAt: report.startedAt, finishedAt: report.finishedAt, checks: persisted, evidenceSource: "runner_observed", note: "Each result was persisted before the runner advanced to another configured check. Only configured executables and arguments were run; each process required a fresh host approval. The profile is operator-controlled configuration, not repository-discovered input." };
       }
       case "factory_evidence_submit": {
         const runId = requireString(args, "runId");
