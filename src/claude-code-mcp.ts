@@ -24,6 +24,8 @@ type ElicitationAction = "accept" | "decline" | "cancel";
 const TOOLS = [
   { name: "factory_session_create", description: "Create a persisted factory workflow session.", inputSchema: { type: "object", properties: { requestId: { type: "string", minLength: 1 } }, required: ["requestId"], additionalProperties: false } },
   { name: "factory_session_get", description: "Read a workflow session, its revision, audit events, steps and evidence.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
+  { name: "factory_session_recover_interrupted", description: "After human confirmation, mark lingering running workflow steps interrupted; never retries them automatically.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 } }, required: ["runId"], additionalProperties: false } },
+  { name: "factory_step_reconcile", description: "Human-gated reconciliation of one interrupted step. Retry requires explicit host approval that the previous external effect was inspected and replay is safe.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, stepId: { type: "string", minLength: 1 }, resolution: { type: "string", enum: ["confirm_succeeded", "confirm_failed", "retry"] }, reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["runId", "stepId", "resolution", "reason"], additionalProperties: false } },
   { name: "factory_plan_request_approval", description: "Ask the human to approve the exact plan in the active host session. Decline, cancel or unsupported elicitation blocks implementation.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, plan: { type: "string", minLength: 1, maxLength: 12000 } }, required: ["runId", "expectedRevision", "plan"], additionalProperties: false } },
   { name: "factory_phase_transition", description: "Advance a workflow only with the expected persisted revision and a legal transition.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, expectedRevision: { type: "integer", minimum: 0 }, to: { type: "string", enum: ["verifying", "reviewing", "failed", "cancelled"] } }, required: ["runId", "expectedRevision", "to"], additionalProperties: false } },
   { name: "factory_action_request_approval", description: "Request fresh human approval for one exact native Claude Code tool input. Payload must be {toolName, toolInput}; it is bound to a SHA-256 digest and consumed once by the PreToolUse gate.", inputSchema: { type: "object", properties: { runId: { type: "string", minLength: 1 }, actionType: { type: "string", enum: ["file.write", "command.execute"] }, toolName: { type: "string", enum: ["Write", "Edit", "MultiEdit", "NotebookEdit", "Bash"] }, toolInput: { type: "object" }, reason: { type: "string", minLength: 1, maxLength: 2000 } }, required: ["runId", "actionType", "toolName", "toolInput", "reason"], additionalProperties: false } },
@@ -112,6 +114,59 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
         const record = await orchestrator.getWorkflow(runId);
         if (!record) throw new Error("Workflow session not found.");
         return record;
+      }
+      case "factory_session_recover_interrupted": {
+        const runId = requireString(args, "runId");
+        const before = await orchestrator.getWorkflow(runId);
+        if (!before) throw new Error("Workflow session not found.");
+        const running = Object.values(before.steps).filter((step) => step.status === "running").map((step) => step.id).sort();
+        if (running.length === 0) return { recovered: [], note: "No running steps require interruption recovery." };
+        const response = await requestHuman(
+          `Confirm recovery of these lingering running steps? No step will be retried. Inspect any child process or external effect first. Run: ${runId}. Steps: ${running.join(", ")}. Each will be marked interrupted and require separate reconciliation.`,
+          parentRequestId,
+        );
+        if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
+          return { recovered: [], blocked: true, reason: "Human declined, cancelled, or did not explicitly approve interruption recovery." };
+        }
+        const latest = await orchestrator.getWorkflow(runId);
+        const latestRunning = latest ? Object.values(latest.steps).filter((step) => step.status === "running").map((step) => step.id).sort() : [];
+        if (!latest || latest.run.revision !== before.run.revision || JSON.stringify(latestRunning) !== JSON.stringify(running)) {
+          throw new WorkflowConflictError("Workflow changed while recovery approval was pending; reload and inspect current steps.");
+        }
+        const recovered = await orchestrator.recoverInterruptedSteps(runId, "claude-code-elicitation-host", running);
+        return { recovered, note: "Steps were marked interrupted only. No command was replayed; reconcile each step after inspecting its external effects." };
+      }
+      case "factory_step_reconcile": {
+        const runId = requireString(args, "runId");
+        const stepId = requireString(args, "stepId");
+        const resolution = requireString(args, "resolution") as "confirm_succeeded" | "confirm_failed" | "retry";
+        if (!["confirm_succeeded", "confirm_failed", "retry"].includes(resolution)) throw new TypeError("Unknown reconciliation resolution.");
+        const reason = requireString(args, "reason");
+        if (reason.length > 2000) throw new TypeError("reason exceeds 2000 characters.");
+        const before = await orchestrator.getWorkflow(runId);
+        if (!before) throw new Error("Workflow session not found.");
+        const step = before.steps[stepId];
+        if (!step || step.status !== "interrupted") throw new WorkflowConflictError("Step is not awaiting reconciliation.");
+        const prompt = resolution === "retry"
+          ? `Authorize retry of interrupted step? First inspect and reconcile the previous process/external effect; retry is safe only if replay cannot duplicate harmful effects. Run: ${runId}. Step: ${stepId}. Previous attempt: ${step.attempt ?? 1}. Reason: ${reason}`
+          : `Confirm reconciliation of interrupted step. Run: ${runId}. Step: ${stepId}. Resolution: ${resolution}. Previous attempt: ${step.attempt ?? 1}. Reason: ${reason}. Only confirm succeeded/failed if you inspected the actual outcome; this does not create runner evidence.`;
+        const response = await requestHuman(prompt, parentRequestId);
+        if (response.action !== "accept" || response.content?.["decision"] !== "approve") {
+          return { reconciled: false, blocked: true, reason: "Human declined, cancelled, or did not explicitly approve this reconciliation." };
+        }
+        const latest = await orchestrator.getWorkflow(runId);
+        const latestStep = latest?.steps[stepId];
+        if (!latest || latest.run.revision !== before.run.revision || !latestStep || latestStep.status !== "interrupted" ||
+            latestStep.startedAt !== step.startedAt || (latestStep.attempt ?? 1) !== (step.attempt ?? 1)) {
+          throw new WorkflowConflictError("Workflow or step changed while reconciliation approval was pending; reload and inspect again.");
+        }
+        const reconciled = await orchestrator.resolveInterruptedStep(
+          runId, stepId, resolution, "claude-code-elicitation-host", reason,
+          { externalEffectReconciled: resolution === "retry" },
+        );
+        return { reconciled: true, step: reconciled, note: resolution === "retry"
+          ? "Retry is authorized only after human-confirmed external-effect reconciliation. The bridge does not execute the retry automatically."
+          : "Step status was reconciled by human confirmation. This does not synthesize runner-observed evidence." };
       }
       case "factory_plan_request_approval": {
         const runId = requireString(args, "runId");
