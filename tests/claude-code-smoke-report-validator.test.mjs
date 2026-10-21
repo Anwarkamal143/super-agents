@@ -100,7 +100,7 @@ test("rejects overall PASS when any check is not PASS", async () => {
 
 test("rejects a report with a missing required check section", async () => {
   const report = (await completedReport()).replace(
-    /^### 9\\. State-directory\\/persistence failure\\n[\\s\\S]*?(?=^## Final assessment)/m,
+    /^### 9\. State-directory\/persistence failure\n[\s\S]*?(?=^## Final assessment)/m,
     "",
   );
   const file = await reportFile(report);
