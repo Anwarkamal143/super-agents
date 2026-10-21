@@ -33,6 +33,8 @@ export interface VerificationConfig {
   readonly id?: () => string;
   readonly spawnProcess?: typeof spawn;
   readonly signal?: AbortSignal;
+  /** Awaited after each result; rejection stops the run before another check can start. */
+  readonly onCheckComplete?: (result: VerificationEvidenceRecord) => Promise<void>;
 }
 
 export interface VerificationAuthorizationPayload {
@@ -96,6 +98,16 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
   const startedAt = now();
   const results: VerificationEvidenceRecord[] = [];
   const spawnProcess = config.spawnProcess ?? spawn;
+  const recordResult = async (result: VerificationEvidenceRecord): Promise<void> => {
+    results.push(result);
+    await config.onCheckComplete?.(result);
+  };
+  const appendNotRun = async (startIndex: number): Promise<void> => {
+    for (const check of config.checks.slice(startIndex)) {
+      await recordResult(emptyEvidence(check, "skipped", repositoryRoot, now, id,
+        "Not run because an earlier check stopped the verification run."));
+    }
+  };
 
   for (let checkIndex = 0; checkIndex < config.checks.length; checkIndex += 1) {
     const check = config.checks[checkIndex];
@@ -115,13 +127,13 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
     };
 
     if (check.skip) {
-      results.push(emptyEvidence(check, "skipped", cwd, now, id, "Check explicitly configured to skip."));
+      await recordResult(emptyEvidence(check, "skipped", cwd, now, id, "Check explicitly configured to skip."));
       continue;
     }
 
     if (config.signal?.aborted) {
-      results.push(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled before authorization."));
-      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      await recordResult(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled before authorization."));
+      await appendNotRun(checkIndex + 1);
       break;
     }
 
@@ -129,23 +141,23 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
     try {
       authorized = await config.authorize("command.execute", authorizationPayload);
     } catch (error) {
-      results.push(emptyEvidence(check, config.signal?.aborted ? "cancelled" : "blocked", cwd, now, id,
+      await recordResult(emptyEvidence(check, config.signal?.aborted ? "cancelled" : "blocked", cwd, now, id,
         config.signal?.aborted ? "Verification run was cancelled during authorization." : safeError(error, "Authorization failed.")));
-      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      await appendNotRun(checkIndex + 1);
       break;
     }
 
     // The parent request may be cancelled while human elicitation is pending.
     // Re-check immediately after the callback and before any process can spawn.
     if (config.signal?.aborted) {
-      results.push(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled during authorization."));
-      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      await recordResult(emptyEvidence(check, "cancelled", cwd, now, id, "Verification run was cancelled during authorization."));
+      await appendNotRun(checkIndex + 1);
       break;
     }
 
     if (!authorized) {
-      results.push(emptyEvidence(check, "blocked", cwd, now, id, "Execution was not authorized."));
-      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      await recordResult(emptyEvidence(check, "blocked", cwd, now, id, "Execution was not authorized."));
+      await appendNotRun(checkIndex + 1);
       break;
     }
 
@@ -167,9 +179,9 @@ export async function runVerification(config: VerificationConfig): Promise<Verif
       id,
       signal: config.signal,
     });
-    results.push(result);
+    await recordResult(result);
     if (result.status === "failed" || result.status === "timed_out" || result.status === "cancelled") {
-      appendNotRunChecks(config.checks, checkIndex + 1, results, repositoryRoot, now, id);
+      await appendNotRun(checkIndex + 1);
       break;
     }
   }
@@ -438,26 +450,6 @@ function emptyEvidence(
   };
 }
 
-
-function appendNotRunChecks(
-  checks: readonly VerificationCheck[],
-  startIndex: number,
-  results: VerificationEvidenceRecord[],
-  repositoryRoot: string,
-  now: () => string,
-  id: () => string,
-): void {
-  for (const check of checks.slice(startIndex)) {
-    results.push(emptyEvidence(
-      check,
-      "skipped",
-      repositoryRoot,
-      now,
-      id,
-      "Not run because an earlier check stopped the verification run.",
-    ));
-  }
-}
 
 function safeError(error: unknown, fallback: string): string {
   return error instanceof Error ? error.message : fallback;
