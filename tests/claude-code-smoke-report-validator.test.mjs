@@ -98,6 +98,21 @@ test("rejects overall PASS when any check is not PASS", async () => {
   }
 });
 
+test("rejects duplicate observation fields that make a check ambiguous", async () => {
+  const report = (await completedReport()).replace(
+    "- Observed: The expected behavior was observed during this check.",
+    "- Observed: The expected behavior was observed during this check.\\n- Observed: conflicting second observation.",
+  );
+  const file = await reportFile(report);
+  try {
+    const result = run(file.reportPath);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Check 1 .*provide exactly one concrete observation/);
+  } finally {
+    await file.cleanup();
+  }
+});
+
 test("rejects a report with a missing required check section", async () => {
   const report = (await completedReport()).replace(
     /^### 9\. State-directory\/persistence failure\n[\s\S]*?(?=^## Final assessment)/m,
