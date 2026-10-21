@@ -435,3 +435,34 @@ test("failed SIGKILL attempt settles as failed instead of hanging forever", asyn
     assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
   });
 });
+
+
+test("process error during shutdown preserves escalation and cleans stream listeners after close", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    let spawnedChild;
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        if (signal === "SIGTERM") child.emit("error", new Error("signal error"));
+        if (signal === "SIGKILL") queueMicrotask(() => child.emit("close", null));
+        return true;
+      };
+      spawnedChild = child;
+      queueMicrotask(() => child.stdout.emit("error", new Error("stream broke")));
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [{ id: "error-close-race", kind: "command", executable: "node", args: [], timeoutMs: 1000 }],
+    }));
+    assert.equal(report.status, "failed");
+    assert.equal(report.checks[0].status, "failed");
+    assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
+    assert.equal(spawnedChild.stdout.listenerCount("error"), 0);
+    assert.equal(spawnedChild.stderr.listenerCount("error"), 0);
+  });
+});
