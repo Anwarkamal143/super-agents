@@ -175,3 +175,10 @@ As with the MCP frame reader, this bounds the hook’s own accumulation, not the
 ## Action-approval elicitation failures
 
 When the host does not advertise elicitation, a prompt times out, or the host request fails, `factory_action_request_approval` records a denied decision for the exact action payload and returns an explicit blocked result. It never creates an active approval on that path. If writing the denial to the approval ledger also fails, the tool call reports an error; neither the action nor a successful audit write is claimed. This is a local audit record, not proof of an authenticated human identity.
+
+
+## Verification process-start failures and recovery
+
+The verification runner records synchronous spawn throws and asynchronous child-process start errors as failed check evidence. Their persisted reason is a stable, generic message; arbitrary exception text is not copied into the report because runtime diagnostics can contain private paths, command arguments, or secrets. Output-stream errors also fail the check and follow the bounded termination path. A close event racing with an earlier error cannot turn the result into a pass or settle the same check twice.
+
+For recovery, preserve the failed run and its evidence, verify the operator-configured executable path, runtime permissions, working directory, and host process/stdio health, then deliberately rerun after assessing replay safety. A start failure means the runner could not establish a successful command execution; it is not evidence that the command ran and failed. The runner does not retry automatically. Detailed host diagnostics, if needed, should be collected through a protected host logging channel rather than added to persisted workflow evidence.
