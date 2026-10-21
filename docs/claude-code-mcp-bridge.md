@@ -172,3 +172,6 @@ The bridge exposes `factory_session_recover_interrupted` and `factory_step_recon
 The compiled PreToolUse hook buffers at most **1,048,576 bytes (1 MiB)** of stdin before JSON parsing. The limit is measured in UTF-8 bytes, not JavaScript string length. Oversized input is denied with a bounded response before the hook reads approval or workflow state; it is never parsed as a partial request.
 
 As with the MCP frame reader, this bounds the hook’s own accumulation, not the size of an individual stream chunk that Node has already allocated. Keep normal host-level process and memory limits in place.
+## Action-approval elicitation failures
+
+When the host does not advertise elicitation, a prompt times out, or the host request fails, `factory_action_request_approval` records a denied decision for the exact action payload and returns an explicit blocked result. It never creates an active approval on that path. If writing the denial to the approval ledger also fails, the tool call reports an error; neither the action nor a successful audit write is claimed. This is a local audit record, not proof of an authenticated human identity.
