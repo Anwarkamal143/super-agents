@@ -1732,3 +1732,106 @@ test("MCP bridge exits cleanly when stdin reaches EOF without a request", async 
   await assert.rejects(readFile(path.join(cwd, ".factory-state", "workflows.json")), { code: "ENOENT" });
 });
 
+test("MCP bridge does not grant native action approval after stdin closes", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-action-eof-"));
+  const client = startClient(cwd, "none", 60_000);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "action-disconnect-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "action-eof" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Allow the workflow to reach an action-approval request.",
+  });
+  assert.equal(plan.approved, true);
+
+  const pending = client.request("tools/call", {
+    name: "factory_action_request_approval",
+    arguments: {
+      runId: created.run.id,
+      actionType: "file.write",
+      toolName: "Write",
+      toolInput: { file_path: path.join(cwd, "must-not-write.txt"), content: "no approval" },
+      reason: "Verify disconnect cannot approve an exact native action.",
+    },
+  }).catch(() => undefined);
+  const prompt = await client.nextElicitation();
+  assert.equal(prompt.method, "elicitation/create");
+
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    closed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Bridge did not exit promptly after action approval disconnect.")), 1500)),
+  ]);
+  await pending;
+
+  const approvals = JSON.parse(await readFile(path.join(cwd, ".factory-state", "approvals.json"), "utf8"));
+  assert.ok(approvals.length > 0, "disconnect should leave an auditable decision");
+  assert.equal(approvals.some((item) => item.outcome === "approved" && item.payload?.toolName === "Write" &&
+    item.payload?.toolInput?.file_path === path.join(cwd, "must-not-write.txt")), false);
+});
+
+test("MCP bridge does not spawn verification command when stdin closes during approval", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-verification-eof-"));
+  const profile = {
+    allowedExecutables: { node: process.execPath },
+    checks: [{
+      id: "disconnect-check",
+      kind: "command",
+      executable: "node",
+      args: ["-e", "require('node:fs').writeFileSync('disconnect-check-ran.txt', 'ran')"],
+      cwd: ".",
+      timeoutMs: 2000,
+      maxOutputBytes: 1024,
+    }],
+  };
+  const client = startClient(cwd, "none", 60_000, profile);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "verification-disconnect-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "verification-eof" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Allow verification to be requested, but not run without approval.",
+  });
+  assert.equal(plan.approved, true);
+
+  const pending = client.request("tools/call", {
+    name: "factory_verification_run",
+    arguments: { runId: created.run.id, expectedRevision: plan.run.revision },
+  }).catch(() => undefined);
+  const prompt = await client.nextElicitation();
+  assert.equal(prompt.method, "elicitation/create");
+
+  const closed = new Promise((resolve) => client.child.once("close", resolve));
+  client.child.stdin.end();
+  await Promise.race([
+    closed,
+    new Promise((_, reject) => setTimeout(() => reject(new Error("Bridge did not exit promptly after verification disconnect.")), 1500)),
+  ]);
+  await pending;
+
+  await assert.rejects(readFile(path.join(cwd, "disconnect-check-ran.txt")), { code: "ENOENT" });
+  const state = JSON.parse(await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8"));
+  const run = state.find((item) => item.run.id === created.run.id);
+  assert.ok(run, "workflow should remain persisted");
+  assert.equal(run.run.status === "completed", false);
+});
+
