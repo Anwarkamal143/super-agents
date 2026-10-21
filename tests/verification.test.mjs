@@ -1,4 +1,5 @@
 import test from "node:test";
+import { createHash } from "node:crypto";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
@@ -276,5 +277,75 @@ test("timed-out check stops later approvals and leaves later checks explicitly s
     assert.equal(fake.calls.length, 1);
     assert.deepEqual(report.checks.map((check) => check.status), ["timed_out", "skipped"]);
     assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
+
+
+test("output-limit overflow fails even when the process exits successfully after SIGTERM", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        // Simulate a process that handles SIGTERM and exits with code 0.
+        queueMicrotask(() => child.emit("close", 0));
+        return true;
+      };
+      queueMicrotask(() => {
+        child.stdout.write(Buffer.from("0123456789"));
+        child.stdout.end();
+        child.stderr.end();
+        child.emit("close", 0);
+      });
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [{ id: "overflow", kind: "command", executable: "node", args: [], maxOutputBytes: 4 }],
+    }));
+    const result = report.checks[0];
+    assert.equal(report.status, "failed");
+    assert.equal(result.status, "failed");
+    assert.equal(result.exitCode, 0);
+    assert.equal(result.reason, "Check exceeded its output limit.");
+    assert.equal(result.stdout.length, 4);
+    assert.equal(result.outputTruncated, true);
+    assert.equal(result.observedStdoutBytes, 10);
+    assert.equal(result.stdoutDigest, createHash("sha256").update("0123456789").digest("hex"));
+    assert.deepEqual(calls, ["SIGTERM"]);
+  });
+});
+
+
+test("output-limit overflow escalates to SIGKILL when a child ignores SIGTERM", async () => {
+  await withRoot(async (root) => {
+    const calls = [];
+    const spawnProcess = (_executable, _args, _options) => {
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = (signal) => {
+        calls.push(signal);
+        if (signal === "SIGKILL") queueMicrotask(() => child.emit("close", null));
+        return true;
+      };
+      queueMicrotask(() => {
+        child.stdout.write(Buffer.from("overflow"));
+        child.stdout.end();
+        child.stderr.end();
+      });
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [{ id: "stubborn-overflow", kind: "command", executable: "node", args: [], maxOutputBytes: 2, timeoutMs: 1000 }],
+    }));
+    assert.equal(report.status, "failed");
+    assert.equal(report.checks[0].status, "failed");
+    assert.equal(report.checks[0].reason, "Check exceeded its output limit.");
+    assert.deepEqual(calls, ["SIGTERM", "SIGKILL"]);
   });
 });

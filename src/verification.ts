@@ -267,8 +267,10 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
   let stderrBytes = 0;
   let retainedBytes = 0;
   let outputTruncated = false;
+  let outputLimitExceeded = false;
   let timedOut = false;
   let cancelled = false;
+  let stopRequested = false;
   let spawnError: string | undefined;
   let settled = false;
   let timer: ReturnType<typeof setTimeout> | undefined;
@@ -285,7 +287,7 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     if (killTimer) clearTimeout(killTimer);
     if (cancelListener) signal?.removeEventListener("abort", cancelListener);
     const status: VerificationStatus = timedOut ? "timed_out" : cancelled ? "cancelled" :
-      spawnError || exitCode !== 0 ? "failed" : "passed";
+      spawnError || outputLimitExceeded || exitCode !== 0 ? "failed" : "passed";
     resolveResult?.({
       id: id(),
       checkId: check.id,
@@ -305,13 +307,15 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
       observedStdoutBytes: stdoutBytes,
       observedStderrBytes: stderrBytes,
       ...(spawnError ? { reason: spawnError } : timedOut ? { reason: "Check exceeded its timeout." } :
-        cancelled ? { reason: "Check was cancelled." } : {}),
+        cancelled ? { reason: "Check was cancelled." } : outputLimitExceeded ? { reason: "Check exceeded its output limit." } : {}),
     });
   };
-  const stop = (kind: "timed_out" | "cancelled") => {
-    if (settled || !child) return;
+  const stop = (kind: "timed_out" | "cancelled" | "output_limit") => {
+    if (settled || !child || stopRequested) return;
+    stopRequested = true;
     timedOut = kind === "timed_out";
     cancelled = kind === "cancelled";
+    if (kind === "output_limit") outputLimitExceeded = true;
     child.kill("SIGTERM");
     killTimer = setTimeout(() => child?.kill("SIGKILL"), 250);
     killTimer.unref();
@@ -344,14 +348,19 @@ async function executeCheck(input: ExecuteCheckInput): Promise<VerificationEvide
     const remaining = maxOutputBytes - retainedBytes;
     if (remaining <= 0) {
       outputTruncated = true;
+      outputLimitExceeded = true;
+      stop("output_limit");
       return;
     }
     const accepted = chunk.subarray(0, remaining);
     retainedBytes += accepted.length;
-    if (accepted.length < chunk.length) outputTruncated = true;
+    if (accepted.length < chunk.length) {
+      outputTruncated = true;
+      outputLimitExceeded = true;
+      stop("output_limit");
+    }
     if (target === "stdout") stdout += accepted.toString("utf8");
     else stderr += accepted.toString("utf8");
-    if (outputTruncated) child?.kill("SIGTERM");
   };
   child.stdout?.on("data", (chunk: Buffer) => collect(chunk, "stdout"));
   child.stderr?.on("data", (chunk: Buffer) => collect(chunk, "stderr"));
