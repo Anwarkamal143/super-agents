@@ -555,3 +555,73 @@ test("evidence persistence failure is typed, redacted, and prevents later checks
     }
   });
 });
+
+
+test("synchronous process-start failure is safe evidence and stops later checks", async () => {
+  await withRoot(async (root) => {
+    let spawnCalls = 0;
+    const authorizations = [];
+    const spawnProcess = () => {
+      spawnCalls += 1;
+      throw new Error("private path /home/user/.secrets TOKEN=private-token-123");
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [
+        { id: "start-fails", kind: "command", executable: "node", args: ["first.js"] },
+        { id: "must-not-run", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => {
+        authorizations.push(payload.checkId);
+        return true;
+      },
+    }));
+
+    assert.equal(report.status, "failed");
+    assert.deepEqual(report.checks.map((check) => check.status), ["failed", "skipped"]);
+    assert.equal(report.checks[0].reason, "Failed to start verification process.");
+    assert.doesNotMatch(report.checks[0].reason, /private-token-123|\.secrets|\/home\/user/);
+    assert.deepEqual(authorizations, ["start-fails"]);
+    assert.equal(spawnCalls, 1);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
+
+test("asynchronous process-start error is redacted and close races settle once", async () => {
+  await withRoot(async (root) => {
+    const authorizations = [];
+    const spawnCalls = [];
+    const spawnProcess = (executable, args, options) => {
+      spawnCalls.push({ executable, args, options });
+      const child = new EventEmitter();
+      child.stdout = new PassThrough();
+      child.stderr = new PassThrough();
+      child.kill = () => true;
+      queueMicrotask(() => {
+        child.emit("error", new Error("spawn failed: TOKEN=private-token-456"));
+        child.emit("close", 0);
+      });
+      return child;
+    };
+
+    const report = await runVerification(config(root, spawnProcess, {
+      checks: [
+        { id: "async-start-fails", kind: "command", executable: "node", args: ["first.js"] },
+        { id: "must-not-run", kind: "test", executable: "node", args: ["second.js"] },
+      ],
+      authorize: async (_action, payload) => {
+        authorizations.push(payload.checkId);
+        return true;
+      },
+    }));
+
+    assert.equal(report.status, "failed");
+    assert.deepEqual(report.checks.map((check) => check.status), ["failed", "skipped"]);
+    assert.equal(report.checks[0].reason, "Verification process failed to start.");
+    assert.doesNotMatch(report.checks[0].reason, /private-token-456|TOKEN=/);
+    assert.equal(report.checks.length, 2);
+    assert.deepEqual(authorizations, ["async-start-fails"]);
+    assert.equal(spawnCalls.length, 1);
+    assert.match(report.checks[1].reason, /earlier check stopped/);
+  });
+});
