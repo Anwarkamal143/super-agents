@@ -379,6 +379,50 @@ test("MCP bridge rejects stale phase revisions without mutating the workflow", a
 });
 
 
+test("MCP server rejects malformed raw tool arguments before workflow mutation", async (t) => {
+  const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-invalid-args-"));
+  const client = startClient(cwd);
+  t.after(async () => {
+    client.child.kill("SIGTERM");
+    await rm(cwd, { recursive: true, force: true });
+  });
+
+  await client.request("initialize", {
+    protocolVersion: "2025-11-25",
+    capabilities: { elicitation: { form: {} } },
+    clientInfo: { name: "test-host", version: "1.0.0" },
+  });
+  const created = await client.tool("factory_session_create", { requestId: "raw-args-test" });
+  const plan = await client.tool("factory_plan_request_approval", {
+    runId: created.run.id,
+    expectedRevision: 0,
+    plan: "Exercise server-side argument validation before any mutation.",
+  });
+  assert.equal(plan.approved, true);
+
+  const before = await client.tool("factory_session_get", { runId: created.run.id });
+  const malformedCalls = [
+    { name: "factory_evidence_submit", arguments: { runId: created.run.id, expectedRevision: before.run.revision, summary: "claimed", kind: "made-up", outcome: "passed" } },
+    { name: "factory_evidence_submit", arguments: { runId: created.run.id, expectedRevision: before.run.revision, summary: "claimed", kind: "test", outcome: "not-a-result" } },
+    { name: "factory_evidence_submit", arguments: { runId: created.run.id, expectedRevision: -1, summary: "claimed", kind: "test", outcome: "passed" } },
+    { name: "factory_phase_transition", arguments: { runId: created.run.id, expectedRevision: before.run.revision, to: "completed" } },
+    { name: "factory_session_create", arguments: { requestId: "unexpected-field", admin: true } },
+    { name: "factory_session_create", arguments: { requestId: " " } },
+  ];
+
+  for (const params of malformedCalls) {
+    const response = await client.request("tools/call", params);
+    assert.equal(response.result?.isError, true, JSON.stringify(response));
+  }
+
+  const after = await client.tool("factory_session_get", { runId: created.run.id });
+  assert.equal(after.run.revision, before.run.revision);
+  assert.deepEqual(after.steps, before.steps);
+  assert.deepEqual(after.evidence, before.evidence);
+  const createdFiles = await readFile(path.join(cwd, ".factory-state", "workflows.json"), "utf8");
+  assert.equal(createdFiles.includes("unexpected-field"), false);
+});
+
 test("MCP bridge persists model-reported evidence provenance and never counts it as runner evidence", async (t) => {
   const cwd = await mkdtemp(path.join(os.tmpdir(), "factory-mcp-evidence-source-"));
   const client = startClient(cwd);

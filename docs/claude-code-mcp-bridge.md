@@ -63,6 +63,12 @@ Persisted audit events and verification evidence are validated field by field be
 
 This validation checks structure and consistency only. A `runner_observed` provenance label is stored metadata, not a cryptographic attestation that a trusted runner executed the claimed check. Do not treat persisted claims as proof beyond the guarantees of the process that wrote them.
 
+## MCP request validation
+
+The bridge validates raw `tools/call` arguments against the server's published input schema before dispatching a tool handler. This independently enforces required fields, value types, enum membership, string bounds, non-negative safe-integer revisions, and rejection of unexpected fields where the schema sets `additionalProperties: false`. Do not rely on a client or model honoring `tools/list` schemas: malformed arguments are rejected before workflow, approval, or evidence state is mutated.
+
+This is request-shape validation, not proof that model-reported evidence is true or that the local host identity is authenticated. Keep the PreToolUse gate and normal Claude Code permissions enabled.
+
 ## Approval-ledger validation
 
 The file-backed approval store validates every approval and audit event before returning ledger state. It rejects malformed action/outcome/status values, invalid timestamps or payload digests, missing identity fields, invalid optional scope metadata, and duplicate approval/event IDs. A malformed ledger makes policy operations fail closed; the PreToolUse hook denies the governed action when it cannot load trustworthy state.

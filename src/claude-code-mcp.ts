@@ -102,6 +102,7 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
   };
 
   const callTool = async (name: string, args: JsonObject, parentRequestId?: string | number, signal?: AbortSignal): Promise<unknown> => {
+    validateToolArguments(name, args);
     switch (name) {
       case "factory_session_create": {
         const requestId = requireString(args, "requestId");
@@ -414,6 +415,60 @@ export async function runFactoryMcpServer(options: FactoryMcpServerOptions = {})
     })().catch(() => undefined);
   });
   await new Promise<void>((resolve) => rl.once("close", resolve));
+}
+
+
+/** Validate raw tool arguments against the same schema advertised by tools/list. */
+function validateToolArguments(name: string, args: JsonObject): void {
+  const tool = TOOLS.find((item) => item.name === name);
+  if (!tool) throw new TypeError(`Unknown tool: ${name}`);
+  validateSchemaValue(args, tool.inputSchema as unknown as JsonObject, "arguments");
+}
+
+function validateSchemaValue(value: unknown, schema: JsonObject, at: string): void {
+  const type = schema["type"];
+  if (type === "object") {
+    if (!value || typeof value !== "object" || Array.isArray(value) || Object.getPrototypeOf(value) !== Object.prototype) {
+      throw new TypeError(`${at} must be an object.`);
+    }
+    const object = value as JsonObject;
+    const required = schema["required"];
+    if (Array.isArray(required)) {
+      for (const key of required) {
+        if (typeof key === "string" && !Object.hasOwn(object, key)) throw new TypeError(`${at}.${key} is required.`);
+      }
+    }
+    const properties = schema["properties"];
+    const propertyMap = properties && typeof properties === "object" && !Array.isArray(properties)
+      ? properties as JsonObject : {};
+    if (schema["additionalProperties"] === false) {
+      for (const key of Object.keys(object)) {
+        if (!Object.hasOwn(propertyMap, key)) throw new TypeError(`${at} contains unexpected field ${key}.`);
+      }
+    }
+    for (const [key, propertySchema] of Object.entries(propertyMap)) {
+      if (Object.hasOwn(object, key)) {
+        if (!propertySchema || typeof propertySchema !== "object" || Array.isArray(propertySchema)) {
+          throw new TypeError(`Invalid server schema for ${at}.${key}.`);
+        }
+        validateSchemaValue(object[key], propertySchema as JsonObject, `${at}.${key}`);
+      }
+    }
+    return;
+  }
+  if (type === "string") {
+    if (typeof value !== "string") throw new TypeError(`${at} must be a string.`);
+    if (typeof schema["minLength"] === "number" && value.length < schema["minLength"]) throw new TypeError(`${at} is too short.`);
+    if (typeof schema["maxLength"] === "number" && value.length > schema["maxLength"]) throw new TypeError(`${at} is too long.`);
+    if (Array.isArray(schema["enum"]) && !schema["enum"].includes(value)) throw new TypeError(`${at} has an unsupported value.`);
+    return;
+  }
+  if (type === "integer") {
+    if (typeof value !== "number" || !Number.isSafeInteger(value)) throw new TypeError(`${at} must be a safe integer.`);
+    if (typeof schema["minimum"] === "number" && value < schema["minimum"]) throw new TypeError(`${at} is below the minimum.`);
+    return;
+  }
+  throw new TypeError(`Unsupported server schema type for ${at}.`);
 }
 
 function isDirectExecution(): boolean {
